@@ -1,0 +1,185 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wayfinder.local/schemas/wayfinder-document.v4.schema.json",
+  "title": "Wayfinder relocation plan v4",
+  "description": "Editable inputs only. Calculated totals and projections are deliberately not part of the document format.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["kind", "schemaVersion", "title", "baseCurrency", "locale", "fieldDefinitions", "sharedValues", "sharedEvidence", "excludedSupport", "researchItems", "projectionAssumptions", "scenarios", "migrationNotes", "updatedAt"],
+  "properties": {
+    "kind": { "const": "wayfinder-relocation-plan" },
+    "schemaVersion": { "const": 4 },
+    "title": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "baseCurrency": { "$ref": "#/$defs/currency" },
+    "locale": { "type": "string", "minLength": 1, "maxLength": 50 },
+    "fieldDefinitions": { "type": "array", "maxItems": 100, "items": { "$ref": "#/$defs/fieldDefinition" } },
+    "sharedValues": { "$ref": "#/$defs/valueMap" },
+    "sharedEvidence": { "$ref": "#/$defs/evidenceMap" },
+    "excludedSupport": { "type": "array", "maxItems": 100, "items": { "$ref": "#/$defs/excludedSupport" } },
+    "researchItems": { "type": "array", "maxItems": 100, "items": { "$ref": "#/$defs/researchItem" } },
+    "projectionAssumptions": { "$ref": "#/$defs/projectionAssumptions" },
+    "scenarios": { "type": "array", "maxItems": 25, "items": { "$ref": "#/$defs/scenario" } },
+    "migrationNotes": { "type": "array", "maxItems": 50, "items": { "type": "string", "minLength": 1, "maxLength": 1000 } },
+    "updatedAt": { "type": "string", "minLength": 1, "maxLength": 50 }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" },
+    "currency": { "type": "string", "pattern": "^[A-Z]{3}$" },
+    "amount": { "type": "number", "minimum": 0 },
+    "dateOrNull": { "type": ["string", "null"], "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+    "inputEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "asOf", "source", "note"],
+      "properties": {
+        "status": { "enum": ["confirmed", "estimate", "unknown"] },
+        "asOf": { "$ref": "#/$defs/dateOrNull" },
+        "source": { "type": "string", "maxLength": 1000 },
+        "note": { "type": "string", "maxLength": 1000 }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "status": { "enum": ["confirmed", "estimate"] } },
+            "required": ["status"]
+          },
+          "then": {
+            "properties": {
+              "asOf": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+              "source": { "type": "string", "minLength": 1, "maxLength": 1000 }
+            }
+          }
+        }
+      ]
+    },
+    "evidenceMap": {
+      "type": "object",
+      "maxProperties": 101,
+      "patternProperties": { "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$": { "$ref": "#/$defs/inputEvidence" } },
+      "additionalProperties": false
+    },
+    "valueMap": {
+      "type": "object",
+      "maxProperties": 100,
+      "patternProperties": { "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$": { "$ref": "#/$defs/amount" } },
+      "additionalProperties": false
+    },
+    "fieldDefinition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "label", "description", "group", "scope"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "label": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "description": { "type": "string", "maxLength": 500 },
+        "group": { "enum": ["deduction", "automaticInvestment", "livingCost", "commitment", "plannedInvestment"] },
+        "scope": { "enum": ["perOption", "shared"] }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "group": { "enum": ["deduction", "automaticInvestment", "livingCost"] } }, "required": ["group"] },
+          "then": { "properties": { "scope": { "const": "perOption" } } }
+        }
+      ]
+    },
+    "fxSnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rateToBase", "asOf", "source"],
+      "properties": {
+        "rateToBase": { "type": "number", "exclusiveMinimum": 0 },
+        "asOf": { "$ref": "#/$defs/dateOrNull" },
+        "source": { "type": "string", "maxLength": 500 }
+      }
+    },
+    "excludedSupport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "label", "monthlyBase", "note"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "label": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "monthlyBase": { "$ref": "#/$defs/amount" },
+        "note": { "type": "string", "maxLength": 1000 }
+      }
+    },
+    "researchItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "topic", "title", "finding", "appliesToScenarioIds", "status", "publisher", "sourceTitle", "sourceUrl", "asOf", "note"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "topic": { "enum": ["tax", "immigration", "housing", "childcare", "transport", "healthcare", "weather", "career", "familyTravel", "other"] },
+        "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "finding": { "type": "string", "minLength": 1, "maxLength": 5000 },
+        "appliesToScenarioIds": { "type": "array", "maxItems": 25, "items": { "$ref": "#/$defs/id" } },
+        "status": { "enum": ["verified", "estimate", "question"] },
+        "publisher": { "type": "string", "maxLength": 300 },
+        "sourceTitle": { "type": "string", "maxLength": 500 },
+        "sourceUrl": {
+          "type": "string",
+          "maxLength": 2000,
+          "anyOf": [
+            { "maxLength": 0 },
+            { "pattern": "^[Hh][Tt][Tt][Pp][Ss]://" }
+          ]
+        },
+        "asOf": { "$ref": "#/$defs/dateOrNull" },
+        "note": { "type": "string", "maxLength": 2000 }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "status": { "enum": ["verified", "estimate"] } },
+            "required": ["status"]
+          },
+          "then": {
+            "properties": {
+              "publisher": { "type": "string", "minLength": 1, "maxLength": 300 },
+              "sourceTitle": { "type": "string", "minLength": 1, "maxLength": 500 },
+              "sourceUrl": { "type": "string", "minLength": 9, "maxLength": 2000, "pattern": "^[Hh][Tt][Tt][Pp][Ss]://" },
+              "asOf": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" }
+            }
+          }
+        }
+      ]
+    },
+    "projectionAssumptions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["incomeGrowthPct", "expenseInflationPct", "years"],
+      "properties": {
+        "incomeGrowthPct": { "type": "number", "minimum": -25, "maximum": 100 },
+        "expenseInflationPct": { "type": "number", "minimum": -25, "maximum": 100 },
+        "years": { "type": "integer", "minimum": 1, "maximum": 20 }
+      }
+    },
+    "scenario": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "flag", "label", "location", "employment", "status", "currency", "fx", "grossMonthly", "values", "evidence", "earners", "color", "spouseJob", "childcare", "transport", "residency", "bonus", "benefits", "risks"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "flag": { "type": "string", "minLength": 1, "maxLength": 3 },
+        "label": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "location": { "type": "string", "minLength": 1, "maxLength": 240 },
+        "employment": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "status": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "currency": { "$ref": "#/$defs/currency" },
+        "fx": { "$ref": "#/$defs/fxSnapshot" },
+        "grossMonthly": { "$ref": "#/$defs/amount" },
+        "values": { "$ref": "#/$defs/valueMap" },
+        "evidence": { "$ref": "#/$defs/evidenceMap" },
+        "earners": { "type": "integer", "minimum": 0, "maximum": 20 },
+        "color": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
+        "spouseJob": { "type": "string", "maxLength": 1000 },
+        "childcare": { "type": "string", "maxLength": 1000 },
+        "transport": { "type": "string", "maxLength": 1000 },
+        "residency": { "type": "string", "maxLength": 1000 },
+        "bonus": { "type": "string", "maxLength": 1000 },
+        "benefits": { "type": "array", "maxItems": 50, "items": { "type": "string", "minLength": 1, "maxLength": 1000 } },
+        "risks": { "type": "array", "maxItems": 50, "items": { "type": "string", "minLength": 1, "maxLength": 1000 } }
+      }
+    }
+  }
+}

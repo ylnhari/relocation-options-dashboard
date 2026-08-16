@@ -1,0 +1,3 @@
+# The generated validator is byte-compared with freshly generated LF output.
+# Force LF on checkout so the drift gate is stable when Git uses autocrlf.
+app/wayfinder-schema-validator.generated.mjs text eol=lf

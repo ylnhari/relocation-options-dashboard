@@ -1,0 +1,46 @@
+{
+  "kind": "wayfinder-relocation-plan",
+  "schemaVersion": 4,
+  "title": "New relocation options",
+  "baseCurrency": "USD",
+  "locale": "en-US",
+  "fieldDefinitions": [
+    { "id": "deduction-income-tax", "label": "Income tax", "description": "Income tax withheld from gross monthly compensation.", "group": "deduction", "scope": "perOption" },
+    { "id": "deduction-payroll", "label": "Payroll and social deductions", "description": "Mandatory payroll, social insurance, or similar non-saving deductions.", "group": "deduction", "scope": "perOption" },
+    { "id": "deduction-other", "label": "Other cash deductions", "description": "Other deductions that reduce take-home cash and are not investments.", "group": "deduction", "scope": "perOption" },
+    { "id": "automatic-retirement", "label": "Payroll retirement or pension saving", "description": "Automatic saving deducted from gross pay; counted as investment, not expense.", "group": "automaticInvestment", "scope": "perOption" },
+    { "id": "living-housing", "label": "Housing", "description": "Rent, mortgage interest, maintenance, or housing charges for this option.", "group": "livingCost", "scope": "perOption" },
+    { "id": "living-utilities", "label": "Electricity, gas and water", "description": "Monthly household utilities.", "group": "livingCost", "scope": "perOption" },
+    { "id": "living-connectivity", "label": "Internet and mobile", "description": "Home internet and household mobile plans.", "group": "livingCost", "scope": "perOption" },
+    { "id": "living-groceries", "label": "Groceries and household", "description": "Food, household supplies, and routine purchases.", "group": "livingCost", "scope": "perOption" },
+    { "id": "living-transport", "label": "Transport", "description": "Public transport, fuel, insurance, parking, and routine travel.", "group": "livingCost", "scope": "perOption" },
+    { "id": "living-childcare", "label": "Childcare and education", "description": "Childcare, school, and recurring education costs.", "group": "livingCost", "scope": "perOption" },
+    { "id": "living-healthcare", "label": "Healthcare and insurance", "description": "Medicines, health costs, and personal insurance paid from take-home cash.", "group": "livingCost", "scope": "perOption" },
+    { "id": "living-leisure", "label": "Dining, leisure and other", "description": "Dining, drinks, recreation, clothing, and other routine spending.", "group": "livingCost", "scope": "perOption" },
+    { "id": "shared-debt", "label": "Debt repayments", "description": "Loans or repayments that continue in every option.", "group": "commitment", "scope": "shared" },
+    { "id": "shared-remittances", "label": "Family support or remittances paid", "description": "Outgoing family costs that remain your responsibility in every option.", "group": "commitment", "scope": "shared" },
+    { "id": "shared-other-commitment", "label": "Other shared commitments", "description": "Other recurring obligations applied equally to every option.", "group": "commitment", "scope": "shared" },
+    { "id": "shared-market-investing", "label": "Market investments", "description": "Planned post-tax investing applied equally to every option.", "group": "plannedInvestment", "scope": "shared" },
+    { "id": "shared-other-investing", "label": "Other planned investment", "description": "Other planned saving or investment applied equally to every option.", "group": "plannedInvestment", "scope": "shared" }
+  ],
+  "sharedValues": { "shared-debt": 0, "shared-remittances": 0, "shared-other-commitment": 0, "shared-market-investing": 0, "shared-other-investing": 0 },
+  "sharedEvidence": {
+    "shared-debt": { "status": "unknown", "asOf": null, "source": "", "note": "" }, "shared-remittances": { "status": "unknown", "asOf": null, "source": "", "note": "" }, "shared-other-commitment": { "status": "unknown", "asOf": null, "source": "", "note": "" }, "shared-market-investing": { "status": "unknown", "asOf": null, "source": "", "note": "" }, "shared-other-investing": { "status": "unknown", "asOf": null, "source": "", "note": "" }
+  },
+  "excludedSupport": [],
+  "researchItems": [],
+  "projectionAssumptions": { "incomeGrowthPct": 5, "expenseInflationPct": 3, "years": 5 },
+  "scenarios": [
+    {
+      "id": "option-template", "flag": "NEW", "label": "New option", "location": "City · country", "employment": "Income included in this option", "status": "Planning", "currency": "USD",
+      "fx": { "rateToBase": 1, "asOf": null, "source": "Base currency" }, "grossMonthly": 0,
+      "values": { "deduction-income-tax": 0, "deduction-payroll": 0, "deduction-other": 0, "automatic-retirement": 0, "living-housing": 0, "living-utilities": 0, "living-connectivity": 0, "living-groceries": 0, "living-transport": 0, "living-childcare": 0, "living-healthcare": 0, "living-leisure": 0 },
+      "evidence": {
+        "grossMonthly": { "status": "unknown", "asOf": null, "source": "", "note": "" }, "deduction-income-tax": { "status": "unknown", "asOf": null, "source": "", "note": "" }, "deduction-payroll": { "status": "unknown", "asOf": null, "source": "", "note": "" }, "deduction-other": { "status": "unknown", "asOf": null, "source": "", "note": "" }, "automatic-retirement": { "status": "unknown", "asOf": null, "source": "", "note": "" }, "living-housing": { "status": "unknown", "asOf": null, "source": "", "note": "" }, "living-utilities": { "status": "unknown", "asOf": null, "source": "", "note": "" }, "living-connectivity": { "status": "unknown", "asOf": null, "source": "", "note": "" }, "living-groceries": { "status": "unknown", "asOf": null, "source": "", "note": "" }, "living-transport": { "status": "unknown", "asOf": null, "source": "", "note": "" }, "living-childcare": { "status": "unknown", "asOf": null, "source": "", "note": "" }, "living-healthcare": { "status": "unknown", "asOf": null, "source": "", "note": "" }, "living-leisure": { "status": "unknown", "asOf": null, "source": "", "note": "" }
+      },
+      "earners": 1, "color": "#b997ff", "spouseJob": "Not assessed", "childcare": "Not assessed", "transport": "Not assessed", "residency": "Not assessed", "bonus": "Not included until converted into recurring monthly inputs.", "benefits": [], "risks": []
+    }
+  ],
+  "migrationNotes": [],
+  "updatedAt": "1970-01-01T00:00:00.000Z"
+}

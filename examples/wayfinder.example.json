@@ -1,0 +1,78 @@
+{
+  "kind": "wayfinder-relocation-plan",
+  "schemaVersion": 4,
+  "title": "Fictional two-city illustration",
+  "baseCurrency": "USD",
+  "locale": "en-US",
+  "fieldDefinitions": [
+    { "id": "deduction-income-tax", "label": "Income tax", "description": "Income tax withheld from gross monthly compensation.", "group": "deduction", "scope": "perOption" },
+    { "id": "deduction-payroll", "label": "Payroll and social deductions", "description": "Mandatory payroll, social insurance, or similar non-saving deductions.", "group": "deduction", "scope": "perOption" },
+    { "id": "deduction-other", "label": "Other cash deductions", "description": "Other deductions that reduce take-home cash and are not investments.", "group": "deduction", "scope": "perOption" },
+    { "id": "automatic-retirement", "label": "Payroll retirement or pension saving", "description": "Automatic saving deducted from gross pay; counted as investment, not expense.", "group": "automaticInvestment", "scope": "perOption" },
+    { "id": "living-housing", "label": "Housing", "description": "Rent, mortgage interest, maintenance, or housing charges for this option.", "group": "livingCost", "scope": "perOption" },
+    { "id": "living-utilities", "label": "Electricity, gas and water", "description": "Monthly household utilities.", "group": "livingCost", "scope": "perOption" },
+    { "id": "living-connectivity", "label": "Internet and mobile", "description": "Home internet and household mobile plans.", "group": "livingCost", "scope": "perOption" },
+    { "id": "living-groceries", "label": "Groceries and household", "description": "Food, household supplies, and routine purchases.", "group": "livingCost", "scope": "perOption" },
+    { "id": "living-transport", "label": "Transport", "description": "Public transport, fuel, insurance, parking, and routine travel.", "group": "livingCost", "scope": "perOption" },
+    { "id": "living-childcare", "label": "Childcare and education", "description": "Childcare, school, and recurring education costs.", "group": "livingCost", "scope": "perOption" },
+    { "id": "living-healthcare", "label": "Healthcare and insurance", "description": "Medicines, health costs, and personal insurance paid from take-home cash.", "group": "livingCost", "scope": "perOption" },
+    { "id": "living-leisure", "label": "Dining, leisure and other", "description": "Dining, drinks, recreation, clothing, and other routine spending.", "group": "livingCost", "scope": "perOption" },
+    { "id": "shared-debt", "label": "Debt repayments", "description": "Loans or repayments that continue in every option.", "group": "commitment", "scope": "shared" },
+    { "id": "shared-remittances", "label": "Family support or remittances paid", "description": "Outgoing family costs that remain your responsibility in every option.", "group": "commitment", "scope": "shared" },
+    { "id": "shared-other-commitment", "label": "Other shared commitments", "description": "Other recurring obligations applied equally to every option.", "group": "commitment", "scope": "shared" },
+    { "id": "shared-market-investing", "label": "Market investments", "description": "Planned post-tax investing applied equally to every option.", "group": "plannedInvestment", "scope": "shared" },
+    { "id": "shared-other-investing", "label": "Other planned investment", "description": "Other planned saving or investment applied equally to every option.", "group": "plannedInvestment", "scope": "shared" }
+  ],
+  "sharedValues": {
+    "shared-debt": 250,
+    "shared-remittances": 150,
+    "shared-other-commitment": 75,
+    "shared-market-investing": 400,
+    "shared-other-investing": 100
+  },
+  "sharedEvidence": {
+    "shared-debt": { "status": "confirmed", "asOf": "2026-08-01", "source": "Fictional loan schedule", "note": "Illustration only." },
+    "shared-remittances": { "status": "estimate", "asOf": "2026-08-01", "source": "Fictional household plan", "note": "Not external help or income." },
+    "shared-other-commitment": { "status": "estimate", "asOf": "2026-08-01", "source": "Fictional planning note", "note": "Review before deciding." },
+    "shared-market-investing": { "status": "estimate", "asOf": "2026-08-01", "source": "Fictional saving target", "note": "Planned post-tax investment." },
+    "shared-other-investing": { "status": "unknown", "asOf": null, "source": "", "note": "Placeholder for a future saving goal." }
+  },
+  "excludedSupport": [
+    { "id": "possible-family-gift", "label": "Possible family gift", "monthlyBase": 300, "note": "Excluded from baseline income and savings; uncertain fictional support." }
+  ],
+  "researchItems": [
+    {
+      "id": "research-fictional-housing", "topic": "housing", "title": "Illustrative rental range", "finding": "Use a range and refresh it before committing; this fictional item is not a market claim.", "appliesToScenarioIds": ["fictional-cad-city"], "status": "estimate", "publisher": "Fictional public housing guide", "sourceTitle": "Illustrative rental planning guide", "sourceUrl": "https://example.com/fictional-housing-guide", "asOf": "2026-08-01", "note": "Illustration only; not included as income or support."
+    },
+    {
+      "id": "research-fictional-tax-question", "topic": "tax", "title": "Confirm payroll withholding", "finding": "Verify actual payroll deductions with an authoritative local source before relying on the estimate.", "appliesToScenarioIds": ["fictional-base-city", "fictional-cad-city"], "status": "question", "publisher": "", "sourceTitle": "", "sourceUrl": "", "asOf": null, "note": "A deliberate unanswered research question."
+    }
+  ],
+  "projectionAssumptions": { "incomeGrowthPct": 3, "expenseInflationPct": 2.5, "years": 5 },
+  "scenarios": [
+    {
+      "id": "fictional-base-city", "flag": "US", "label": "Fictional base city", "location": "Exampleville, United States", "employment": "Illustrative single-earner role", "status": "Illustration", "currency": "USD",
+      "fx": { "rateToBase": 1, "asOf": "2026-08-01", "source": "Base currency" }, "grossMonthly": 7000,
+      "values": { "deduction-income-tax": 1200, "deduction-payroll": 450, "deduction-other": 50, "automatic-retirement": 350, "living-housing": 1800, "living-utilities": 180, "living-connectivity": 110, "living-groceries": 650, "living-transport": 300, "living-childcare": 0, "living-healthcare": 250, "living-leisure": 400 },
+      "evidence": {
+        "grossMonthly": { "status": "estimate", "asOf": "2026-08-01", "source": "Fictional offer worksheet", "note": "Illustration only." },
+        "deduction-income-tax": { "status": "estimate", "asOf": "2026-08-01", "source": "Fictional tax estimate", "note": "" }, "deduction-payroll": { "status": "estimate", "asOf": "2026-08-01", "source": "Fictional payroll estimate", "note": "" }, "deduction-other": { "status": "unknown", "asOf": null, "source": "", "note": "" }, "automatic-retirement": { "status": "confirmed", "asOf": "2026-08-01", "source": "Fictional benefits sheet", "note": "Counts as savings." },
+        "living-housing": { "status": "estimate", "asOf": "2026-08-01", "source": "Fictional listing", "note": "" }, "living-utilities": { "status": "estimate", "asOf": "2026-08-01", "source": "Fictional utility estimate", "note": "" }, "living-connectivity": { "status": "estimate", "asOf": "2026-08-01", "source": "Fictional plan", "note": "" }, "living-groceries": { "status": "estimate", "asOf": "2026-08-01", "source": "Fictional budget", "note": "" }, "living-transport": { "status": "estimate", "asOf": "2026-08-01", "source": "Fictional commute estimate", "note": "" }, "living-childcare": { "status": "confirmed", "asOf": "2026-08-01", "source": "No childcare in illustration", "note": "Zero is intentional." }, "living-healthcare": { "status": "estimate", "asOf": "2026-08-01", "source": "Fictional budget", "note": "" }, "living-leisure": { "status": "estimate", "asOf": "2026-08-01", "source": "Fictional budget", "note": "" }
+      },
+      "earners": 1, "color": "#f6b44f", "spouseJob": "Not included", "childcare": "No childcare cost in this illustration", "transport": "Illustrative transit and occasional rides", "residency": "Fictional current location", "bonus": "Excluded: this model uses recurring monthly inputs only.", "benefits": ["Illustrative retirement match is outside this cash model."], "risks": ["All figures are fictional estimates."]
+    },
+    {
+      "id": "fictional-cad-city", "flag": "CA", "label": "Fictional CAD option", "location": "North Example, Canada", "employment": "Illustrative relocation offer", "status": "Illustration", "currency": "CAD",
+      "fx": { "rateToBase": 0.73, "asOf": "2026-08-01", "source": "Fictional FX snapshot" }, "grossMonthly": 9500,
+      "values": { "deduction-income-tax": 1800, "deduction-payroll": 500, "deduction-other": 0, "automatic-retirement": 475, "living-housing": 2800, "living-utilities": 220, "living-connectivity": 130, "living-groceries": 850, "living-transport": 260, "living-childcare": 0, "living-healthcare": 160, "living-leisure": 450 },
+      "evidence": {
+        "grossMonthly": { "status": "estimate", "asOf": "2026-08-01", "source": "Fictional offer worksheet", "note": "Illustration only." },
+        "deduction-income-tax": { "status": "estimate", "asOf": "2026-08-01", "source": "Fictional tax estimate", "note": "" }, "deduction-payroll": { "status": "estimate", "asOf": "2026-08-01", "source": "Fictional payroll estimate", "note": "" }, "deduction-other": { "status": "confirmed", "asOf": "2026-08-01", "source": "Fictional payroll plan", "note": "No other deduction." }, "automatic-retirement": { "status": "confirmed", "asOf": "2026-08-01", "source": "Fictional benefits sheet", "note": "Automatic saving, not an expense." },
+        "living-housing": { "status": "estimate", "asOf": "2026-08-01", "source": "Fictional listing", "note": "" }, "living-utilities": { "status": "estimate", "asOf": "2026-08-01", "source": "Fictional utility estimate", "note": "" }, "living-connectivity": { "status": "estimate", "asOf": "2026-08-01", "source": "Fictional plan", "note": "" }, "living-groceries": { "status": "estimate", "asOf": "2026-08-01", "source": "Fictional budget", "note": "" }, "living-transport": { "status": "estimate", "asOf": "2026-08-01", "source": "Fictional commute estimate", "note": "" }, "living-childcare": { "status": "confirmed", "asOf": "2026-08-01", "source": "No childcare in illustration", "note": "Zero is intentional." }, "living-healthcare": { "status": "estimate", "asOf": "2026-08-01", "source": "Fictional budget", "note": "" }, "living-leisure": { "status": "estimate", "asOf": "2026-08-01", "source": "Fictional budget", "note": "" }
+      },
+      "earners": 1, "color": "#b997ff", "spouseJob": "Not included", "childcare": "No childcare cost in this illustration", "transport": "Illustrative public transit", "residency": "Fictional planned residency", "bonus": "Excluded: one-time relocation payments are not recurring income.", "benefits": ["Illustrative healthcare coverage may reduce a future input."], "risks": ["FX rate is a fictional snapshot and must be refreshed for real use."]
+    }
+  ],
+  "migrationNotes": [],
+  "updatedAt": "2026-08-01T00:00:00.000Z"
+}

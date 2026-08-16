@@ -1,0 +1,37 @@
+name: Feature request
+description: Suggest an improvement while preserving local-first, auditable comparisons.
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please do not upload personal financial data, browser exports, family reports, credentials, account identifiers, or private URLs. Examples must be fictional or aggregate. For security concerns, use the private reporting process in SECURITY.md.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem to solve
+      description: What decision, workflow, or clarity issue would this improve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: Describe the user-visible behavior. Include a synthetic example if useful.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: checkboxes
+    id: safeguards
+    attributes:
+      label: Product safeguards
+      options:
+        - label: This proposal keeps data local-first and does not require tracking, account creation, or cloud persistence.
+          required: true
+        - label: This proposal can be described without personal financial data or exports.
+          required: true

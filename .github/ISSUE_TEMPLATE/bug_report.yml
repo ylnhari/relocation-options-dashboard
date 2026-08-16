@@ -1,0 +1,46 @@
+name: Bug report
+description: Report a reproducible problem using only synthetic data.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve Wayfinder. Do not upload personal financial data, browser exports, family reports, credentials, account identifiers, or private URLs. Use a minimal synthetic example. Security vulnerabilities should be reported privately as described in SECURITY.md.
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened?
+      description: Describe the observed behavior and its impact.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Provide the smallest reproducible sequence using fictional or aggregate values only.
+      placeholder: |
+        1. Start with the blank template
+        2. Enter fictional values...
+        3. Observe...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Browser, operating system, app version or commit, and any relevant synthetic document version.
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy check
+      options:
+        - label: I used only synthetic or aggregate data and did not attach a personal export or report.
+          required: true
