@@ -69,7 +69,7 @@ test("changing an option currency cannot reuse a stale exchange rate", () => {
   assert.deepEqual(fxAfterCurrencyChange("CAD", "INR", "INR", currentFx), {
     rateToBase: 1,
     asOf: null,
-    source: "Base currency",
+    source: "",
   });
   assert.deepEqual(fxAfterCurrencyChange("CAD", "AED", "INR", currentFx), {
     rateToBase: 0,

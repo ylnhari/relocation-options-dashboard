@@ -38,14 +38,21 @@ test("new documents have no household financial defaults", () => {
   assert.deepEqual(DEFAULT_SCENARIOS, []);
   assert.equal(document.baseCurrency, "USD");
   assert.equal(document.scenarios.length, 0);
+  assert.deepEqual(document.projectionAssumptions, {
+    incomeGrowthPct: 0,
+    expenseInflationPct: 0,
+    years: 1,
+  });
   assert.ok(Object.values(document.sharedValues).every((value) => value === 0));
   assert.equal(starter.grossMonthly, 0);
   assert.ok(Object.values(starter.values).every((value) => value === 0));
   assert.equal(deriveScenario(document, starter).totalSavingBase, 0);
   for (const scenario of [starter, alternative]) {
+    assert.equal(scenario.flag, "");
     assert.equal(scenario.label, "");
     assert.equal(scenario.location, "");
     assert.equal(scenario.employment, "");
+    assert.equal(scenario.status, "");
     assert.equal(scenario.spouseJob, "");
     assert.equal(scenario.childcare, "");
     assert.equal(scenario.transport, "");

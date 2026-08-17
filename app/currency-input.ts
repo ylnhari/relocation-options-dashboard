@@ -36,7 +36,7 @@ export function fxAfterCurrencyChange(
   currentFx: FxSnapshotLike,
 ): FxSnapshotLike {
   if (nextCurrency === baseCurrency) {
-    return { rateToBase: 1, asOf: null, source: "Base currency" };
+    return { rateToBase: 1, asOf: null, source: "" };
   }
   if (nextCurrency === currentCurrency) return currentFx;
   return { rateToBase: 0, asOf: null, source: "" };

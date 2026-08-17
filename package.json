@@ -24,6 +24,7 @@
     "check:schema-validator": "node scripts/check-schema-validator.mjs",
     "validate:data": "node scripts/validate-data.mjs",
     "validate:examples": "npm run check:schema-validator && node scripts/validate-data.mjs examples/wayfinder.example.json && node scripts/validate-data.mjs examples/wayfinder.template.json",
+    "test:e2e": "playwright test",
     "test": "npm run typecheck && npm run build && node --test tests/document.test.mjs tests/import-validator.test.mjs tests/runtime-seed.test.mjs tests/validate-data.test.mjs tests/rendered-html.test.mjs tests/calculations.test.mjs tests/currency-input.test.mjs tests/share-report.test.mjs && python -m unittest tests/test_portlib.py tests/test_dev.py",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "check": "npm run validate:examples && npm test && npm run lint"
@@ -36,6 +37,7 @@
     "@cloudflare/vite-plugin": "1.52.1",
     "@eslint/js": "9.39.4",
     "@next/eslint-plugin-next": "16.2.6",
+    "@playwright/test": "1.57.0",
     "@tailwindcss/postcss": "4.2.1",
     "@types/node": "22.19.19",
     "@types/react": "19.2.14",

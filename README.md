@@ -15,7 +15,7 @@ The repository contains no household defaults. A clean browser opens empty.
 
 ## What makes the comparison auditable
 
-- One user-selected base currency and an explicit, dated FX rate per option.
+- One user-selected comparison currency and an explicit, dated conversion ratio per option.
 - Gross compensation visible on every tile.
 - Itemized non-saving deductions, automatic payroll investments, living costs,
   continuing commitments, and planned investments.
@@ -40,7 +40,7 @@ The repository contains no household defaults. A clean browser opens empty.
 
 ## Financial model
 
-All calculations are monthly and converted to the document's base currency:
+All calculations are monthly and converted to the chosen comparison currency:
 
 ```text
 net cash = gross − non-saving deductions − automatic investments
@@ -90,7 +90,7 @@ launcher checks `WAYFINDER_PORT`, an optional generic `ports.json`, then uses
 the clone-safe fallback `8780`. It binds to loopback and never scans for a
 different port.
 
-### Optional Windows runtime starter document
+### Optional Windows runtime starter comparison
 
 To open one local running instance with an already-validated v4 document:
 
@@ -105,7 +105,7 @@ the flag is omitted; `--document` wins when both are present. The launcher
 copies the exact bounded input into an ignored local runtime artifact, validates
 it with the same schema and semantic path as imports, and enables it only for
 that child development process. Production builds and previews ignore seed
-control variables, so a starter document cannot be compiled into public assets.
+control variables, so a starter comparison cannot be compiled into public assets.
 A normal `npm run dev`, `npm run build`, `npm start`, or launcher run without a
 document remains empty.
 
@@ -138,19 +138,38 @@ request `Host` and forwarded-host headers are never used.
 ### Manual setup
 
 1. Choose **Enter my details**.
-2. Select the base currency, review the standard fields, and enter shared
-   commitments and investment targets once.
+2. Select the comparison currency, review the standard fields, and enter every
+   assumption, source, and dynamic value yourself. The clean start has no
+   option or household data. Shared amounts also start blank; type the value or
+   explicitly apply **Use 0** before saving.
 3. Enter the current situation, including gross, deductions, automatic
-   investments, local costs, FX evidence, and qualitative assumptions.
+   investments, local costs, field evidence, and qualitative assumptions. New
+   option amounts start blank. Type the amount, type `0`, or use the section's
+   explicit **Use 0** action; untouched zeroes cannot be saved as facts.
 4. Add or duplicate alternatives. Expanding a tile reveals the exact split.
+   For every non-comparison-currency option, supply its currency, a positive
+   conversion ratio to the comparison currency, an as-of date, and a source.
+   A missing linked option field or any of those conversion fields rejects the complete
+   option/document rather than creating a partial comparison.
+
+If an older browser-saved migration predates conversion dates, Wayfinder keeps
+that option locally but excludes it from cards, totals, charts, rankings, and
+family views until the user supplies both a date and a real source. Editable
+exports are also blocked until that repair is complete, because an incomplete
+file would fail strict re-import. New files, agent output, the CLI, and normal
+imports remain strict.
 
 ### Agent setup
 
 1. Give the agent [`examples/wayfinder.template.json`](examples/wayfinder.template.json),
    [`schemas/wayfinder-document.v4.schema.json`](schemas/wayfinder-document.v4.schema.json),
    and [`docs/AGENT-WORKFLOW.md`](docs/AGENT-WORKFLOW.md).
-2. Ask it to use official/primary sources, mark estimates, and fill every
-   standard field with zero where it does not apply.
+2. Give it only user-authorized inputs; ask it to use official/primary sources,
+   mark estimates, and fill every standard field with zero only where that is
+   the user's intentional placeholder. The agent must author the same canonical
+   v4 document the browser exports, not a separate agent format. The blank
+   template's 0% growth, 0% inflation, and one-year period are neutral structural
+   placeholders, not forecasts; replace them with the user's choices.
 3. Validate the result:
 
    ```bash
@@ -160,8 +179,11 @@ request `Host` and forwarded-host headers are never used.
 4. Import it. Wayfinder validates the entire document and shows a summary before
    any existing browser data is replaced.
 
-The browser export and an agent-completed comparison use the same format. There
-is no hidden agent API or alternate calculation path.
+The browser export and an agent-completed comparison use the same canonical v4
+format. Export, clear, import, and export again must be equal after replacing
+only `updatedAt` with a fixed token and normalizing JSON keys; calculated totals
+and projections are never editable file fields. There is no hidden agent API or
+alternate calculation path.
 
 ## Standard contract files
 
@@ -181,7 +203,7 @@ is no hidden agent API or alternate calculation path.
 `npm run validate:data -- <document.json>` first checks a v4 document against
 the maintained Draft 2020-12 JSON Schema, then applies semantic rules that are
 awkward to express in JSON Schema, including field references, scope,
-base-currency FX, gross reconciliation, and research applicability. Supported
+comparison-currency conversion details, gross reconciliation, and research applicability. Supported
 legacy documents are migrated to v4 before their resulting document is checked
 against the schema. CLI JSON output reports a safe relative path or basename,
 never an absolute machine path.
@@ -211,11 +233,18 @@ npm run validate:examples
 npm test
 npm run lint
 npm run build
+npx playwright install chromium
+npm run test:e2e
 ```
 
 `npm test` includes type checking, a production build, financial invariants,
 schema/semantic CLI and migration/import tests, rendered privacy checks, report
 hardening, and Python-backed portable port-resolution tests.
+`npm run test:e2e` starts a separate loopback-only test server and proves a
+fictional comparison can be built from an empty browser, exported, validated,
+cleared, restored, and protected from an invalid replacement. It never reuses
+an existing server; set `WAYFINDER_E2E_PORT` when the default isolated test port
+`8792` is already assigned on your machine.
 
 ## Project structure
 
@@ -225,7 +254,7 @@ docs/          architecture, calculations, agent and research guidance
 examples/      fictional and blank v4 documents
 schemas/       public JSON Schema
 scripts/       portable launcher and document validator
-tests/         calculation, contract, rendering, report, and port tests
+tests/         calculation, contract, rendering, browser, report, and port tests
 worker/        stateless application worker entry point
 ```
 

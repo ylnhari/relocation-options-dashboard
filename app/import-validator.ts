@@ -1,6 +1,7 @@
 import generatedSchemaValidator from "./wayfinder-schema-validator.generated.mjs";
 import {
   parseWayfinderDocument,
+  type DocumentValidationOptions,
   type DocumentResult,
   type ValidationIssue,
 } from "./document";
@@ -83,13 +84,16 @@ function validateV4Schema(value: unknown): ValidationIssue[] | null {
  * before semantic validation; the recognized legacy shape migrates first and
  * the resulting v4 document is schema-checked before it is accepted.
  */
-export function validateWayfinderInput(value: unknown): DocumentResult {
+export function validateWayfinderInput(
+  value: unknown,
+  options: DocumentValidationOptions = {},
+): DocumentResult {
   if (!legacyInput(value)) {
     const issues = validateV4Schema(value);
-    return issues ? { ok: false, issues } : parseWayfinderDocument(value);
+    return issues ? { ok: false, issues } : parseWayfinderDocument(value, options);
   }
 
-  const result = parseWayfinderDocument(value);
+  const result = parseWayfinderDocument(value, options);
   if (!result.ok) return result;
   const issues = validateV4Schema(result.document);
   return issues ? { ok: false, issues } : result;

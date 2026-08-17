@@ -43,9 +43,11 @@ function currentDocument() {
   const document = createWayfinderDocument("USD");
   const scenario = createCurrentScenario(document);
   scenario.id = "option-current";
+  scenario.flag = "EX";
   scenario.label = "Fictional current option";
   scenario.location = "Example City";
   scenario.employment = "One fictional income";
+  scenario.status = "Current test";
   document.scenarios = [scenario];
   return document;
 }
@@ -61,9 +63,15 @@ test("validates the current v4 document shape and both public-safe examples", as
   assert.equal(result.ok, true);
 
   for (const name of ["wayfinder.example.json", "wayfinder.template.json"]) {
-    const parsed = parseWayfinderDocument(await example(name));
+    const fixture = await example(name);
+    const parsed = parseWayfinderDocument(fixture);
     assert.equal(parsed.ok, true, name);
     assert.equal(parsed.migrated, false, name);
+    if (name === "wayfinder.template.json") {
+      assert.deepEqual(fixture.scenarios, []);
+      assert.deepEqual(fixture.researchItems, []);
+      assert.deepEqual(fixture.excludedSupport, []);
+    }
   }
 });
 
@@ -235,6 +243,24 @@ test("requires shared and per-option values and evidence to use their declared s
   assert.ok(sharedResult.issues.some((issue) => issue.path.endsWith("sharedValues.option-local-commitment")));
 });
 
+test("rejects an option atomically when a linked value or evidence entry is missing", () => {
+  const missingValue = currentDocument();
+  delete missingValue.scenarios[0].values["living-housing"];
+  const valueResult = validateWayfinderDocument(missingValue);
+  assert.equal(valueResult.ok, false);
+  assert.ok(valueResult.issues.some((issue) =>
+    issue.path.endsWith("values.living-housing") && issue.message === "Option field is missing.",
+  ));
+
+  const missingEvidence = currentDocument();
+  delete missingEvidence.scenarios[0].evidence["living-housing"];
+  const evidenceResult = validateWayfinderDocument(missingEvidence);
+  assert.equal(evidenceResult.ok, false);
+  assert.ok(evidenceResult.issues.some((issue) =>
+    issue.path.endsWith("evidence.living-housing") && issue.message === "Input evidence is missing.",
+  ));
+});
+
 test("validates structured research and rejects unknown scenario references or non-HTTPS URLs", () => {
   const document = currentDocument();
   document.researchItems = [{
@@ -318,7 +344,7 @@ test("migrates a valid legacy backup into a valid v4 document", () => {
   assert.equal(validateWayfinderDocument(result.document).ok, true);
 });
 
-test("accepts only the recognized legacy signature and preserves the transparent FX exception", () => {
+test("accepts only the recognized legacy signature and rejects undated non-base conversions", () => {
   const unrelated = parseWayfinderDocument({ scenarios: [{ label: "Not a legacy record" }] });
   assert.equal(unrelated.ok, false);
 
@@ -361,9 +387,41 @@ test("accepts only the recognized legacy signature and preserves the transparent
     indiaCommitments: 100,
     investmentTarget: 200,
   }]);
-  assert.equal(migratedNonBase.ok, true);
-  assert.equal(migratedNonBase.document.scenarios[0].fx.asOf, null);
-  assert.equal(validateWayfinderDocument(migratedNonBase.document).ok, true);
+  assert.equal(migratedNonBase.ok, false);
+  assert.ok(migratedNonBase.issues.some((issue) =>
+    issue.path.endsWith("fx.asOf") && issue.message.includes("conversion date"),
+  ));
+
+  const recoverableStoredMigration = parseWayfinderDocument([{
+    currency: "CAD",
+    fxToInr: 60,
+    grossMonthly: 1000,
+    netMonthly: 800,
+    localLiving: 300,
+    indiaCommitments: 100,
+    investmentTarget: 200,
+  }], { allowLegacyConversionGap: true });
+  assert.equal(recoverableStoredMigration.ok, true);
+  assert.equal(
+    validateWayfinderDocument(recoverableStoredMigration.document).ok,
+    false,
+  );
+  assert.equal(
+    validateWayfinderDocument(recoverableStoredMigration.document, {
+      allowLegacyConversionGap: true,
+    }).ok,
+    true,
+  );
+
+  const datedButUnverified = structuredClone(recoverableStoredMigration.document);
+  datedButUnverified.scenarios[0].fx.asOf = "2026-08-17";
+  const datedResult = validateWayfinderDocument(datedButUnverified, {
+    allowLegacyConversionGap: true,
+  });
+  assert.equal(datedResult.ok, false);
+  assert.ok(datedResult.issues.some((issue) =>
+    issue.path.endsWith("fx.source") && issue.message.includes("real conversion source"),
+  ));
 });
 
 test("limits import collection and keyed-map sizes", () => {

@@ -29,18 +29,8 @@
   },
   "excludedSupport": [],
   "researchItems": [],
-  "projectionAssumptions": { "incomeGrowthPct": 5, "expenseInflationPct": 3, "years": 5 },
-  "scenarios": [
-    {
-      "id": "option-template", "flag": "NEW", "label": "New option", "location": "City · country", "employment": "Income included in this option", "status": "Planning", "currency": "USD",
-      "fx": { "rateToBase": 1, "asOf": null, "source": "Base currency" }, "grossMonthly": 0,
-      "values": { "deduction-income-tax": 0, "deduction-payroll": 0, "deduction-other": 0, "automatic-retirement": 0, "living-housing": 0, "living-utilities": 0, "living-connectivity": 0, "living-groceries": 0, "living-transport": 0, "living-childcare": 0, "living-healthcare": 0, "living-leisure": 0 },
-      "evidence": {
-        "grossMonthly": { "status": "unknown", "asOf": null, "source": "", "note": "" }, "deduction-income-tax": { "status": "unknown", "asOf": null, "source": "", "note": "" }, "deduction-payroll": { "status": "unknown", "asOf": null, "source": "", "note": "" }, "deduction-other": { "status": "unknown", "asOf": null, "source": "", "note": "" }, "automatic-retirement": { "status": "unknown", "asOf": null, "source": "", "note": "" }, "living-housing": { "status": "unknown", "asOf": null, "source": "", "note": "" }, "living-utilities": { "status": "unknown", "asOf": null, "source": "", "note": "" }, "living-connectivity": { "status": "unknown", "asOf": null, "source": "", "note": "" }, "living-groceries": { "status": "unknown", "asOf": null, "source": "", "note": "" }, "living-transport": { "status": "unknown", "asOf": null, "source": "", "note": "" }, "living-childcare": { "status": "unknown", "asOf": null, "source": "", "note": "" }, "living-healthcare": { "status": "unknown", "asOf": null, "source": "", "note": "" }, "living-leisure": { "status": "unknown", "asOf": null, "source": "", "note": "" }
-      },
-      "earners": 1, "color": "#b997ff", "spouseJob": "Not assessed", "childcare": "Not assessed", "transport": "Not assessed", "residency": "Not assessed", "bonus": "Not included until converted into recurring monthly inputs.", "benefits": [], "risks": []
-    }
-  ],
+  "projectionAssumptions": { "incomeGrowthPct": 0, "expenseInflationPct": 0, "years": 1 },
+  "scenarios": [],
   "migrationNotes": [],
   "updatedAt": "1970-01-01T00:00:00.000Z"
 }

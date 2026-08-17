@@ -29,6 +29,36 @@ export type DocumentResult =
       issues: ValidationIssue[];
     };
 
+export type DocumentValidationOptions = {
+  allowLegacyConversionGap?: boolean;
+};
+
+const LEGACY_CONVERSION_SOURCES = new Set([
+  "Legacy import — verify this rate",
+  "Older import — verify this conversion ratio",
+]);
+const LEGACY_CONVERSION_NOTES = new Set([
+  "Legacy FX rates had no as-of date and should be verified.",
+  "Older conversion ratios had no date and must be verified before import.",
+]);
+
+function carriesLegacyConversionMarker(root: Record<string, unknown>, source: unknown) {
+  return typeof source === "string" &&
+    LEGACY_CONVERSION_SOURCES.has(source) &&
+    Array.isArray(root.migrationNotes) &&
+    root.migrationNotes.some((note) => typeof note === "string" && LEGACY_CONVERSION_NOTES.has(note));
+}
+
+export function isLegacyUndatedConversion(
+  document: Pick<WayfinderDocument, "baseCurrency" | "migrationNotes">,
+  scenario: Pick<Scenario, "currency" | "fx">,
+) {
+  return scenario.currency !== document.baseCurrency &&
+    scenario.fx.asOf === null &&
+    LEGACY_CONVERSION_SOURCES.has(scenario.fx.source) &&
+    document.migrationNotes.some((note) => LEGACY_CONVERSION_NOTES.has(note));
+}
+
 const ROOT_KEYS = new Set([
   "kind",
   "schemaVersion",
@@ -351,7 +381,10 @@ function validateEvidence(
   }
 }
 
-export function validateWayfinderDocument(value: unknown): DocumentResult {
+export function validateWayfinderDocument(
+  value: unknown,
+  options: DocumentValidationOptions = {},
+): DocumentResult {
   const issues: ValidationIssue[] = [];
   if (!isRecord(value)) {
     return { ok: false, issues: [{ path: "$", message: "Expected a JSON object." }] };
@@ -685,7 +718,7 @@ export function validateWayfinderDocument(value: unknown): DocumentResult {
       validateStringArray(candidate.risks, `${path}.risks`, issues);
 
       if (!isRecord(candidate.fx)) {
-        issues.push({ path: `${path}.fx`, message: "Expected an FX snapshot." });
+        issues.push({ path: `${path}.fx`, message: "Expected conversion details." });
       } else {
         unknownKeys(candidate.fx, FX_KEYS, `${path}.fx`, issues);
         finiteNumber(candidate.fx.rateToBase, `${path}.fx.rateToBase`, issues, {
@@ -705,20 +738,28 @@ export function validateWayfinderDocument(value: unknown): DocumentResult {
           max: 500,
         });
         if (candidate.currency !== value.baseCurrency) {
-          if (typeof candidate.fx.source !== "string" || candidate.fx.source.trim().length === 0) {
+          const acceptedLegacyGap = Boolean(
+            options.allowLegacyConversionGap &&
+            candidate.fx.asOf === null &&
+            carriesLegacyConversionMarker(value, candidate.fx.source),
+          );
+          if (
+            typeof candidate.fx.source !== "string" ||
+            candidate.fx.source.trim().length === 0 ||
+            (LEGACY_CONVERSION_SOURCES.has(candidate.fx.source) && !acceptedLegacyGap)
+          ) {
             issues.push({
               path: `${path}.fx.source`,
-              message: "A non-base-currency option requires an FX source.",
+              message: "An option using another currency requires a real conversion source.",
             });
           }
-          const isTransparentLegacyGap =
-            candidate.fx.source === "Legacy import — verify this rate" &&
-            Array.isArray(value.migrationNotes) &&
-            value.migrationNotes.includes("Legacy FX rates had no as-of date and should be verified.");
-          if (candidate.fx.asOf === null && !isTransparentLegacyGap) {
+          if (
+            candidate.fx.asOf === null &&
+            !acceptedLegacyGap
+          ) {
             issues.push({
               path: `${path}.fx.asOf`,
-              message: "A non-base-currency option requires an FX as-of date.",
+              message: "An option using another currency requires a conversion date.",
             });
           }
         }
@@ -729,7 +770,7 @@ export function validateWayfinderDocument(value: unknown): DocumentResult {
         ) {
           issues.push({
             path: `${path}.fx.rateToBase`,
-            message: "A base-currency option must use an FX rate of 1.",
+            message: "An option using the comparison currency must use a conversion ratio of 1.",
           });
         }
       }
@@ -834,12 +875,15 @@ function legacyString(value: unknown, fallback: string) {
   return typeof value === "string" ? value : fallback;
 }
 
-function migrateLegacy(value: unknown): DocumentResult {
+function migrateLegacy(
+  value: unknown,
+  options: DocumentValidationOptions = {},
+): DocumentResult {
   const root = Array.isArray(value) ? { scenarios: value } : value;
   if (!isRecord(root) || !Array.isArray(root.scenarios)) {
     return {
       ok: false,
-      issues: [{ path: "$", message: "Not a supported Wayfinder document." }],
+      issues: [{ path: "$", message: "Not a supported Wayfinder comparison file." }],
     };
   }
 
@@ -894,7 +938,7 @@ function migrateLegacy(value: unknown): DocumentResult {
   document.migrationNotes = [
     "Legacy totals were preserved as option-level fields. Review which commitments and investments should become shared.",
     "Legacy gross-to-net differences were preserved as non-saving deductions because their original categories were not available.",
-    "Legacy FX rates had no as-of date and should be verified.",
+    "Older conversion ratios had no date and must be verified before import.",
   ];
 
   document.scenarios = root.scenarios.map((raw, index) => {
@@ -937,7 +981,7 @@ function migrateLegacy(value: unknown): DocumentResult {
       fx: {
         rateToBase: legacyNumber(candidate.fxToInr, `${path}.fxToInr`, issues),
         asOf: null,
-        source: "Legacy import — verify this rate",
+        source: "Older import — verify this conversion ratio",
       },
       grossMonthly: gross,
       values,
@@ -948,7 +992,7 @@ function migrateLegacy(value: unknown): DocumentResult {
             {
               status: "unknown",
               asOf: null,
-              source: "Legacy import",
+              source: "Older import",
               note: "Review and confirm this migrated input.",
             },
           ],
@@ -975,16 +1019,19 @@ function migrateLegacy(value: unknown): DocumentResult {
   document.updatedAt = new Date().toISOString();
 
   if (issues.length) return { ok: false, issues };
-  const validated = validateWayfinderDocument(document);
+  const validated = validateWayfinderDocument(document, options);
   if (!validated.ok) return validated;
   return { ok: true, document: validated.document, migrated: true };
 }
 
-export function parseWayfinderDocument(value: unknown): DocumentResult {
+export function parseWayfinderDocument(
+  value: unknown,
+  options: DocumentValidationOptions = {},
+): DocumentResult {
   if (isRecord(value) && ("kind" in value || "schemaVersion" in value)) {
-    return validateWayfinderDocument(value);
+    return validateWayfinderDocument(value, options);
   }
-  return migrateLegacy(value);
+  return migrateLegacy(value, options);
 }
 
 export function syncDocumentFields(document: WayfinderDocument): WayfinderDocument {

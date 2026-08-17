@@ -19,6 +19,13 @@ The versioned Wayfinder document is the single source of truth:
 
 Do not add a second calculation path or a private data format.
 
+A clean browser must be able to recreate every user-authored value visible on a
+populated dashboard through the UI. An agent must be able to create the same
+canonical document through the public template, schema, validator, and runtime
+starter. Product labels and neutral starter categories/placeholders may be built
+in; personal figures, user-specific assumptions, findings, sources, and option
+facts may not be.
+
 ## Financial invariants
 
 - Common field definitions are edited once. Per-option fields appear in every
@@ -35,6 +42,10 @@ Do not add a second calculation path or a private data format.
   certainty or quality scores.
 - Derived values are recomputed locally and are rejected if supplied as trusted
   agent inputs.
+- Every option in a currency other than the comparison currency requires an
+  explicit positive conversion ratio, date, and source. Missing linked values,
+  evidence, or conversion inputs invalidate the whole option/document before it
+  can be saved or displayed.
 
 ## Agentic-first workflow
 
@@ -75,8 +86,8 @@ Do not add a second calculation path or a private data format.
 
 ## Quality and release gates
 
-- Run `npm run validate:examples`, `npm test`, `npm run lint`, and
-  `git diff --check` after material changes.
+- Run `npm run validate:examples`, `npm test`, `npm run lint`,
+  `npm run test:e2e`, and `git diff --check` after material changes.
 - Preserve keyboard access, focus visibility, reduced-motion behavior,
   responsive layouts, readable contrast, empty/error states, and safe import
   confirmation.

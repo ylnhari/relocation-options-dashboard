@@ -88,7 +88,7 @@ test("keeps the v4 model, import contract, calculations, and sharing flows publi
   assert.match(page, /localAmount=\{editor\.values\[field\.id\] \?\? 0\}/);
   assert.match(page, /onChangeLocal=\{\(amount\) => updateEditorValue\(field\.id, amount\)\}/);
   assert.match(page, /baseToLocalAmount\(baseAmount/);
-  assert.match(page, /localAmount === null \? `Enter the \$\{editor\.currency\} exchange rate`/);
+  assert.match(page, /localAmount === null \? `Enter the \$\{editor\.currency\} conversion ratio`/);
   assert.doesNotMatch(page, /formatMoney\(localAmount \?\? 0/);
   assert.match(currencyInput, /return localAmount \* rateToBase/);
   assert.match(currencyInput, /return baseAmount \/ rateToBase/);
@@ -160,14 +160,14 @@ test("keeps the v4 model, import contract, calculations, and sharing flows publi
   // Import and manual setup meet at the same document model; imports are parsed,
   // validated, previewed, and explicitly confirmed before replacing the dashboard.
   assert.match(page, /MAX_DOCUMENT_BYTES[\s\S]*validateWayfinderInput/);
-  assert.match(page, /const result = validateWayfinderInput\(JSON\.parse\(value\)\)/);
+  assert.match(page, /const result = validateWayfinderInput\(JSON\.parse\(value\), \{[\s\S]*allowLegacyConversionGap: true[\s\S]*\}\)/);
   assert.match(page, /file\.size > MAX_DOCUMENT_BYTES[\s\S]*await file\.text\(\)/);
-  assert.match(page, /const result = validateWayfinderInput\(JSON\.parse\(await file\.text\(\)\)\)/);
+  assert.match(page, /const parsed = JSON\.parse\(await file\.text\(\)\)[\s\S]*const result = validateWayfinderInput\(parsed\)/);
   assert.match(page, /document: syncDocumentFields\(result\.document\)/);
   assert.match(page, /Replace this browser’s complete comparison\?/);
   assert.match(page, /Nothing changes until you confirm; it replaces everything, with no partial merge/);
   assert.match(page, /Replace complete comparison/);
-  assert.match(page, /const confirmImport = async \(\) => \{[\s\S]*await commitPlan\([\s\S]*confirmedImport\.document,[\s\S]*Validated document replaced this browser dashboard/);
+  assert.match(page, /const confirmImport = async \(\) => \{[\s\S]*await commitPlan\([\s\S]*confirmedImport\.document,[\s\S]*Validated comparison replaced this browser dashboard/);
   assert.ok(
     page.indexOf("setImportCandidate({") < page.indexOf("const confirmImport"),
     "the import candidate must be prepared before the replacement handler",
@@ -245,11 +245,52 @@ test("keeps the v4 model, import contract, calculations, and sharing flows publi
 
   // Starter objects contain no fake identity or assumption facts. Required
   // identity fields are completed by the user; examples live in placeholders.
-  assert.match(scenarios, /label: "",[\s\S]*location: "",[\s\S]*employment: ""/);
+  assert.match(scenarios, /flag: "",[\s\S]*label: "",[\s\S]*location: "",[\s\S]*employment: "",[\s\S]*status: ""/);
   assert.doesNotMatch(scenarios, /City · country|Current household income|Income included in this option|Not assessed/);
-  assert.match(page, /Option name[\s\S]*required placeholder="For example: Current household"/);
-  assert.match(page, /Income summary[\s\S]*input required placeholder="Who is working and which income is included\?"/);
-  assert.ok(page.indexOf("Income summary") < page.indexOf("Card label and display details"));
+  assert.match(page, /Option name[\s\S]*input required[^>]*placeholder="For example: Current household"/);
+  assert.match(page, /Income summary[\s\S]*input required[^>]*placeholder="Who is working and which income is included\?"/);
+  assert.ok(page.indexOf("Income summary") < page.indexOf("Card appearance"));
+  assert.match(page, /Household earners included[\s\S]*required min="0" max="20"/);
+  assert.match(page, /Conversion ratio[\s\S]*Same currency, so the ratio is always 1[\s\S]*1 \$\{editor\.currency \|\| "option currency"\} = how many \$\{plan\.baseCurrency\}\?/);
+  assert.match(page, /No conversion required/);
+  assert.match(page, /Optional reference date/);
+  assert.match(page, /Optional currency note or source/);
+  assert.match(page, /Conversion date · required/);
+  assert.match(page, /Conversion source · required/);
+  assert.match(page, /const editorConversionReady = Boolean[\s\S]*hasUsableFxRate[\s\S]*Boolean\(editor\.fx\.asOf\)[\s\S]*editor\.fx\.source\.trim\(\)\.length > 0/);
+  assert.match(page, /const editorAmountsReady = Boolean/);
+  assert.match(page, /const editorPreview = editor && editorConversionReady && editorAmountsReady/);
+  assert.match(page, /value\.trim\(\)\.length === 0[\s\S]*onChangeLocal\(null\)/);
+  assert.match(page, /if \(amount === null\) next\.delete\(fieldId\)/);
+  assert.match(page, /This option cannot be added until they are complete/);
+  assert.match(page, /enteredScenarioAmounts/);
+  assert.match(page, /enteredSharedAmounts/);
+  assert.match(page, /Use 0 for \{blankSharedFields\.length\} blank shared/);
+  assert.match(page, /value=\{enteredSharedAmounts\.has\(field\.id\) \? modelDraft\.sharedValues\[field\.id\] \?\? 0 : ""\}/);
+  assert.match(page, /Use 0 for \{blankFields\.length\} blank/);
+  assert.match(page, /\$\{enteredFields\.length\} entered/);
+  assert.match(page, /entered=\{enteredScenarioAmounts\.has\("grossMonthly"\)\}/);
+  assert.match(page, /collapsible=\{fields\.length \+ sharedFields\.length >= LONG_EDITOR_SECTION_SIZE\}/);
+  assert.match(page, /const preflight = validateWayfinderInput\(syncDocumentFields\(next\), \{[\s\S]*allowLegacyConversionGap[\s\S]*if \(!preflight\.ok\)[\s\S]*return;[\s\S]*commitPlan\(next/);
+  assert.match(page, /legacyRepairScenarios/);
+  assert.match(page, /Older options need a conversion date/);
+  assert.match(page, /isLegacyUndatedConversion\(plan, scenario\)[\s\S]*editableScenario\.fx\.source = ""/);
+  assert.match(page, /const exportDocument = \(\) => \{[\s\S]*legacyRepairScenarios\.length > 0[\s\S]*Complete the older conversion details/);
+  assert.match(page, /No reusable backup can be created yet/);
+  assert.match(page, /disabled=\{legacyRepairScenarios\.length > 0\}[\s\S]*Reusable backup unavailable/);
+  assert.match(page, /Remove without reusable backup/);
+  assert.match(page, /Replace without reusable backup/);
+  assert.match(page, /I reviewed the comparison currency, number format, growth, inflation, and projection years/);
+  assert.match(page, /const freshStart =[\s\S]*plan\.updatedAt === DEFAULT_DOCUMENT\.updatedAt/);
+  assert.match(page, /if \(freshStart\) \{[\s\S]*draft\.title = "";[\s\S]*draft\.baseCurrency = "";[\s\S]*draft\.locale = "";/);
+  assert.match(page, /freshStart[\s\S]*incomeGrowthPct: "", expenseInflationPct: "", years: ""/);
+  assert.match(page, /Annual income growth %[\s\S]*Enter your assumption[\s\S]*value=\{projectionInputDraft\?\.incomeGrowthPct \?\? ""\}/);
+  assert.match(page, /disabled=\{!\/\^\[A-Z\]\{3\}\$\/\.test\(modelDraft\.baseCurrency\)\}/);
+  assert.match(page, /title: "", finding: ""/);
+  assert.match(page, /const reclassifyModelField =/);
+  assert.match(page, /Category[\s\S]*field\.group[\s\S]*Used in[\s\S]*field\.scope/);
+  assert.match(page, /Same amount in every option/);
+  assert.match(page, /This item was not changed\. Set its amounts to zero and accuracy to Needs source first/);
   assert.match(page, /Remove this option from this browser\?[\s\S]*Download saved backup[\s\S]*Cancel[\s\S]*Confirm removal/);
 
   // Every rendered dialog participates in the shared focus trap, inert
