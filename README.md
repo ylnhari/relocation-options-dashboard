@@ -173,6 +173,7 @@ is no hidden agent API or alternate calculation path.
 - [Official-source directory](docs/OFFICIAL-SOURCE-DIRECTORY.md)
 - [Country research packs](docs/COUNTRY-RESEARCH-PACKS.md)
 - [Relocation decision checklist](docs/RELOCATION-DECISION-CHECKLIST.md)
+- [Manual UI acceptance](docs/MANUAL-UI-ACCEPTANCE.md)
 - [Product roadmap](docs/ROADMAP.md)
 - [Asset provenance](docs/ASSETS.md)
 - [Privacy model](PRIVACY.md)

@@ -48,17 +48,19 @@ test("server-renders an empty, local-first v4 first run", async () => {
 });
 
 test("keeps the v4 model, import contract, calculations, and sharing flows public-safe", async () => {
-  const [page, scenarios, document, layout, privacy, runtimeSeed, viteConfig, launcher] = await Promise.all([
+  const [page, scenarios, document, layout, styles, currencyInput, privacy, runtimeSeed, viteConfig, launcher] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/scenarios.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/document.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+    readFile(new URL("../app/currency-input.ts", import.meta.url), "utf8"),
     readFile(new URL("../PRIVACY.md", import.meta.url), "utf8"),
     readFile(new URL("../app/runtime-seed.ts", import.meta.url), "utf8"),
     readFile(new URL("../vite.config.ts", import.meta.url), "utf8"),
     readFile(new URL("../scripts/dev.py", import.meta.url), "utf8"),
   ]);
-  const publicSource = [page, scenarios, document, layout, privacy, runtimeSeed, viteConfig, launcher].join("\n");
+  const publicSource = [page, scenarios, document, layout, styles, currencyInput, privacy, runtimeSeed, viteConfig, launcher].join("\n");
 
   // A new public clone starts with the full field model but no household options.
   assert.match(scenarios, /SCHEMA_VERSION\s*=\s*4/);
@@ -74,6 +76,34 @@ test("keeps the v4 model, import contract, calculations, and sharing flows publi
   assert.doesNotMatch(page, />Comparison model</);
   assert.doesNotMatch(page, />Manual or agent input</);
   assert.doesNotMatch(page, /same validated document contract/);
+
+  // Manual option entry exposes one canonical local amount through linked,
+  // clearly labelled option- and comparison-currency controls. Converted
+  // values remain UI projections rather than a second stored field.
+  assert.match(page, /function CurrencyAmountEditor/);
+  assert.match(page, /Option currency/);
+  assert.match(page, /Comparison currency/);
+  assert.match(page, /Edit either amount\. Linked using 1/);
+  assert.match(page, /localAmount=\{editor\.grossMonthly\}/);
+  assert.match(page, /localAmount=\{editor\.values\[field\.id\] \?\? 0\}/);
+  assert.match(page, /onChangeLocal=\{\(amount\) => updateEditorValue\(field\.id, amount\)\}/);
+  assert.match(page, /baseToLocalAmount\(baseAmount/);
+  assert.match(page, /localAmount === null \? `Enter the \$\{editor\.currency\} exchange rate`/);
+  assert.doesNotMatch(page, /formatMoney\(localAmount \?\? 0/);
+  assert.match(currencyInput, /return localAmount \* rateToBase/);
+  assert.match(currencyInput, /return baseAmount \/ rateToBase/);
+  assert.doesNotMatch(scenarios, /grossMonthlyBase|valuesBase|convertedValues/);
+
+  // Long, data-driven edit sections use native disclosures. Short sections
+  // remain fieldsets, and invalid controls can open their nearest disclosure.
+  assert.match(page, /fields\.length >= LONG_EDITOR_SECTION_SIZE/);
+  assert.match(page, /className="editor-section collapsible-editor-section"/);
+  assert.match(page, /title="Research and sources"[\s\S]*collapsible/);
+  assert.match(page, /title="External Help \/ Family Support received"[\s\S]*collapsible/);
+  assert.match(styles, /summary:focus-visible/);
+  assert.match(styles, /\.currency-input-pair[\s\S]*grid-template-columns/);
+  assert.match(styles, /@media \(max-width: 650px\)[\s\S]*\.currency-input-pair \{ grid-template-columns: 1fr; \}/);
+  assert.match(page, /firstInvalid\.closest\("details"\)[\s\S]*details\.open = true/);
 
   // Browser persistence parses current and legacy values independently, never
   // autosaves the empty first render, and updates React state only after a
@@ -96,7 +126,7 @@ test("keeps the v4 model, import contract, calculations, and sharing flows publi
     "a valid plan saved by another tab must win before a runtime seed writes",
   );
   assert.match(page, /localStorage\.setItem\(STORAGE_KEY, serialized\)[\s\S]*localStorage\.removeItem\(LEGACY_STORAGE_KEY\)/);
-  assert.match(page, /Later edits stay in this browser/);
+  assert.match(page, /Your comparison is ready and saved in this browser/);
   assert.ok(
     page.indexOf("shouldApplyRuntimeSeed(snapshot.status, runtimeSeed)")
       < page.indexOf('snapshot.status === "invalid" || snapshot.status === "unavailable"'),
@@ -193,6 +223,34 @@ test("keeps the v4 model, import contract, calculations, and sharing flows publi
   assert.match(page, /evidence\.note\.trim\(\)\.length > 0/);
   assert.match(page, /hasMeaningfulEvidence\(modelDraft\.sharedEvidence\[id\]\)/);
   assert.match(page, /hasMeaningfulEvidence\(scenario\.evidence\[id\]\)/);
+  assert.match(page, /if \(populated && !confirmed\)/);
+  assert.match(page, /Remove “\{field\.label\}”\?/);
+  assert.match(page, /Download saved backup/);
+  assert.match(page, /Confirm remove/);
+
+  // Stored currencies cannot be silently reinterpreted. Existing option
+  // currencies stay fixed, while changing the comparison currency has an
+  // explicit backup-and-restart route.
+  assert.match(page, /const optionCurrencyLocked = Boolean/);
+  assert.match(page, /disabled=\{optionCurrencyLocked\}/);
+  assert.match(page, /const comparisonCurrencyLocked = Boolean[\s\S]*Object\.values\(modelDraft\.sharedValues\)\.some[\s\S]*modelDraft\.excludedSupport\.some/);
+  assert.match(page, /disabled=\{comparisonCurrencyLocked\}/);
+  assert.match(page, /shared or excluded-support amounts are entered/);
+  assert.match(page, /Back up or start again with another currency/);
+  assert.match(page, /setCurrencyRestartDraft\(cloneDocument\(modelDraft\)\); setModelDraft\(null\); setClearConfirm\(true\)/);
+  assert.match(page, /const cancelClearDashboard = useCallback[\s\S]*setModelDraft\(currencyRestartDraft\)[\s\S]*setCurrencyRestartDraft\(null\)/);
+  assert.match(page, /currencyRestartDraft \? syncDocumentFields\(currencyRestartDraft\) : plan/);
+  assert.match(page, /Your open Shared settings edits are preserved here\. Cancel returns to them/);
+  assert.match(page, /Download draft backup/);
+
+  // Starter objects contain no fake identity or assumption facts. Required
+  // identity fields are completed by the user; examples live in placeholders.
+  assert.match(scenarios, /label: "",[\s\S]*location: "",[\s\S]*employment: ""/);
+  assert.doesNotMatch(scenarios, /City · country|Current household income|Income included in this option|Not assessed/);
+  assert.match(page, /Option name[\s\S]*required placeholder="For example: Current household"/);
+  assert.match(page, /Income summary[\s\S]*input required placeholder="Who is working and which income is included\?"/);
+  assert.ok(page.indexOf("Income summary") < page.indexOf("Card label and display details"));
+  assert.match(page, /Remove this option from this browser\?[\s\S]*Download saved backup[\s\S]*Cancel[\s\S]*Confirm removal/);
 
   // Every rendered dialog participates in the shared focus trap, inert
   // background, Escape handling, and opener-focus restoration lifecycle.
@@ -233,7 +291,8 @@ test("keeps the v4 model, import contract, calculations, and sharing flows publi
   assert.match(page, /Download editable comparison file/);
   assert.match(page, /Download family view/);
   assert.match(page, /createFamilyShareHtml\(plan\)/);
-  assert.match(page, /Source-backed research records/);
+  assert.match(page, /Research and sources/);
+  assert.doesNotMatch(page, /common fields|field definitions|Controlled from one place/);
   assert.match(page, /HTTPS source URL/);
   assert.match(page, /research notes never change money totals by themselves/);
 

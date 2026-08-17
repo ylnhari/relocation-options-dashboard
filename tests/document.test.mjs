@@ -43,6 +43,9 @@ function currentDocument() {
   const document = createWayfinderDocument("USD");
   const scenario = createCurrentScenario(document);
   scenario.id = "option-current";
+  scenario.label = "Fictional current option";
+  scenario.location = "Example City";
+  scenario.employment = "One fictional income";
   document.scenarios = [scenario];
   return document;
 }

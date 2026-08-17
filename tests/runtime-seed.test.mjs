@@ -79,16 +79,17 @@ test("damaged browser storage is recoverable before a runtime seed replaces it",
   );
 
   assert.match(page, /const downloadRecoveryCopy = \(\) => \{[\s\S]*getItem\(RECOVERY_STORAGE_KEY\)[\s\S]*downloadText\(/);
-  assert.match(page, /cannot be imported as a complete comparison/);
-  assert.match(page, /may contain sensitive figures/);
-  assert.match(page, /className="storage-notice-action"[\s\S]*Download unreadable-data copy/);
+  assert.match(page, /cannot be imported as a comparison/);
+  assert.match(page, /may contain private figures/);
+  assert.match(page, /className="storage-notice-action"[\s\S]*Download old backup/);
   assert.match(page, /\{\(storageNotice \|\| recoveryAvailable\) && \(/);
-  assert.match(page, /storageNotice\?\.message \?\? "A raw copy of an earlier unreadable browser draft is available/);
+  assert.match(page, /storageNotice\?\.message \?\? RECOVERY_NOTICE_MESSAGE/);
   assert.match(page, /function inspectRecoveryCopy\(\)[\s\S]*getItem\(RECOVERY_STORAGE_KEY\)[\s\S]*MAX_DOCUMENT_BYTES/);
   assert.match(page, /const recovery = inspectRecoveryCopy\(\)[\s\S]*setRecoveryAvailable\(recovery\.status === "available"\)/);
-  assert.match(page, /snapshot\.status === "valid"[\s\S]*recovery\.status === "available"[\s\S]*raw copy of an earlier unreadable browser draft is available/);
+  assert.match(page, /snapshot\.status === "valid"[\s\S]*recovery\.status === "available"[\s\S]*RECOVERY_NOTICE_MESSAGE/);
   assert.match(styles, /\.storage-notice\.seed/);
   assert.match(styles, /\.storage-notice-action[\s\S]*min-height: 44px/);
+  assert.match(styles, /@media \(max-width: 650px\)[\s\S]*\.storage-notice[\s\S]*grid-template-columns: 1fr[\s\S]*\.storage-notice-action \{ width: 100%; \}/);
 
   assert.match(clearDashboard, /getItem\(RECOVERY_STORAGE_KEY\)/);
   assert.match(clearDashboard, /removeItem\(RECOVERY_STORAGE_KEY\)[\s\S]*removeItem\(LEGACY_STORAGE_KEY\)[\s\S]*removeItem\(STORAGE_KEY\)/);

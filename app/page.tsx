@@ -1,6 +1,8 @@
 "use client";
 
 import {
+  Fragment,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -8,6 +10,7 @@ import {
   type CSSProperties,
   type ChangeEvent,
   type FormEvent,
+  type ReactNode,
 } from "react";
 import {
   DEFAULT_DOCUMENT,
@@ -45,6 +48,14 @@ import {
 } from "./scenario-math";
 import { createFamilyShareHtml } from "./share-report";
 import { parseRuntimeSeed, shouldApplyRuntimeSeed } from "./runtime-seed";
+import {
+  baseToLocalAmount,
+  formatEditableAmount,
+  fxAfterCurrencyChange,
+  hasUsableFxRate,
+  localToBaseAmount,
+  parseMoneyInput,
+} from "./currency-input";
 
 type DisplayMode = "base" | "local";
 type StorageNotice = { tone: "warning" | "seed" | "error"; message: string };
@@ -76,6 +87,8 @@ const STORAGE_LOCK_DB_NAME = "wayfinder-coordination";
 const STORAGE_LOCK_DB_VERSION = 1;
 const STORAGE_LOCK_STORE = "browser-storage-locks";
 const RECOVERY_STORAGE_KEY = "wayfinder.recovery.invalid-browser-draft.v1";
+const RECOVERY_NOTICE_MESSAGE = "We saved a raw copy of unreadable browser data. It may contain private figures and cannot be imported as a comparison.";
+const LONG_EDITOR_SECTION_SIZE = 4;
 
 const groupMeta: Record<
   FieldGroup,
@@ -486,17 +499,159 @@ function formatPercent(value: number) {
   return `${value.toFixed(1)}%`;
 }
 
+function EditorSection({
+  title,
+  summary,
+  note,
+  collapsible = false,
+  children,
+}: {
+  title: string;
+  summary?: string;
+  note?: string;
+  collapsible?: boolean;
+  children: ReactNode;
+}) {
+  if (collapsible) {
+    return (
+      <details className="editor-section collapsible-editor-section">
+        <summary><strong>{title}</strong>{summary && <span>{summary}</span>}</summary>
+        <div className="collapsible-editor-body">
+          {note && <p className="field-note">{note}</p>}
+          {children}
+        </div>
+      </details>
+    );
+  }
+
+  return (
+    <fieldset className="editor-section">
+      <legend>{title}</legend>
+      {note && <p className="field-note">{note}</p>}
+      {children}
+    </fieldset>
+  );
+}
+
+function CurrencyAmountEditor({
+  id,
+  label,
+  description,
+  localAmount,
+  localCurrency,
+  baseCurrency,
+  rateToBase,
+  onChangeLocal,
+}: {
+  id: string;
+  label: string;
+  description?: string;
+  localAmount: number;
+  localCurrency: string;
+  baseCurrency: string;
+  rateToBase: number;
+  onChangeLocal: (amount: number) => void;
+}) {
+  const [localDraft, setLocalDraft] = useState<string | null>(null);
+  const [baseDraft, setBaseDraft] = useState<string | null>(null);
+  const sameCurrency = localCurrency === baseCurrency;
+  const usableRate = sameCurrency || hasUsableFxRate(rateToBase);
+  const effectiveRate = sameCurrency ? 1 : rateToBase;
+  const baseAmount = localToBaseAmount(localAmount, effectiveRate);
+  const descriptionId = `${id}-currency-help`;
+
+  const updateLocalText = (value: string) => {
+    setLocalDraft(value);
+    const amount = parseMoneyInput(value);
+    if (amount !== null) {
+      onChangeLocal(amount);
+      setBaseDraft(null);
+    }
+  };
+
+  const updateBaseText = (value: string) => {
+    setBaseDraft(value);
+    const amount = parseMoneyInput(value);
+    const converted = amount === null ? null : baseToLocalAmount(amount, effectiveRate);
+    if (converted !== null) {
+      onChangeLocal(converted);
+      setLocalDraft(null);
+    }
+  };
+
+  const finishLocalEdit = () => {
+    if (localDraft !== null && parseMoneyInput(localDraft) !== null) setLocalDraft(null);
+  };
+
+  const finishBaseEdit = () => {
+    if (baseDraft !== null && parseMoneyInput(baseDraft) !== null) setBaseDraft(null);
+  };
+
+  return (
+    <div className="currency-amount-editor" role="group" aria-labelledby={`${id}-label`}>
+      <div className="currency-amount-copy" id={`${id}-label`}>
+        <strong>{label}</strong>
+        {description && <small>{description}</small>}
+      </div>
+      <div className={`currency-input-pair ${sameCurrency ? "same-currency" : ""}`}>
+        <label>
+          <span>{sameCurrency ? "Option and comparison currency" : "Option currency"} <b>{localCurrency}</b></span>
+          <input
+            aria-describedby={descriptionId}
+            aria-label={`${label} in ${localCurrency}`}
+            required
+            min="0"
+            step="any"
+            inputMode="decimal"
+            type="number"
+            value={localDraft ?? formatEditableAmount(localAmount)}
+            onChange={(event) => updateLocalText(event.target.value)}
+            onBlur={finishLocalEdit}
+          />
+        </label>
+        {!sameCurrency && (
+          <>
+            <span className="currency-link" aria-hidden="true">=</span>
+            <label>
+              <span>Comparison currency <b>{baseCurrency}</b></span>
+              <input
+                aria-describedby={descriptionId}
+                aria-label={`${label} in ${baseCurrency}`}
+                required
+                min="0"
+                step="any"
+                inputMode="decimal"
+                type="number"
+                disabled={!usableRate}
+                value={baseDraft ?? formatEditableAmount(baseAmount)}
+                onChange={(event) => updateBaseText(event.target.value)}
+                onBlur={finishBaseEdit}
+              />
+            </label>
+          </>
+        )}
+      </div>
+      <small className="currency-conversion-note" id={descriptionId}>
+        {sameCurrency
+          ? `This option and the comparison both use ${baseCurrency}.`
+          : usableRate
+            ? `Edit either amount. Linked using 1 ${localCurrency} = ${formatEditableAmount(rateToBase)} ${baseCurrency}.`
+            : `Enter a positive exchange rate above to calculate ${baseCurrency}.`}
+      </small>
+      {!sameCurrency && usableRate && (
+        <span className="sr-only" aria-live="polite" aria-atomic="true">
+          {formatEditableAmount(localAmount)} {localCurrency} equals {formatEditableAmount(baseAmount)} {baseCurrency}.
+        </span>
+      )}
+    </div>
+  );
+}
+
 function flagGlyph(code: string) {
   if (!/^[A-Z]{2}$/.test(code)) return code.slice(0, 3).toUpperCase();
   return String.fromCodePoint(
     ...[...code].map((letter) => 127397 + letter.charCodeAt(0)),
   );
-}
-
-function fieldValue(document: WayfinderDocument, scenario: Scenario, field: FieldDefinition) {
-  return field.scope === "shared"
-    ? document.sharedValues[field.id] ?? 0
-    : scenario.values[field.id] ?? 0;
 }
 
 function MoneyValue({
@@ -651,7 +806,7 @@ function BreakdownGroup({
           );
         })
       ) : (
-        <p className="empty-breakdown">No fields are configured for this category.</p>
+        <p className="empty-breakdown">No items are configured for this category.</p>
       )}
     </section>
   );
@@ -678,6 +833,7 @@ export default function Home() {
   const [modelDraft, setModelDraft] = useState<WayfinderDocument | null>(null);
   const [shareOpen, setShareOpen] = useState(false);
   const [clearConfirm, setClearConfirm] = useState(false);
+  const [currencyRestartDraft, setCurrencyRestartDraft] = useState<WayfinderDocument | null>(null);
   const [deleteScenarioConfirm, setDeleteScenarioConfirm] = useState(false);
   const [deleteFieldConfirm, setDeleteFieldConfirm] = useState<string | null>(null);
   const [importCandidate, setImportCandidate] = useState<{
@@ -749,6 +905,12 @@ export default function Home() {
                 ? "share"
                 : null;
 
+  const cancelClearDashboard = useCallback(() => {
+    setClearConfirm(false);
+    if (currencyRestartDraft) setModelDraft(currencyRestartDraft);
+    setCurrencyRestartDraft(null);
+  }, [currencyRestartDraft]);
+
   useEffect(() => {
     if (!activeDialogId) return;
     if (!dialogCycleRef.current) {
@@ -811,7 +973,7 @@ export default function Home() {
       if (activeDialogId === "storage-conflict") setStorageConflict(null);
       if (activeDialogId === "import-errors") setImportIssues([]);
       if (activeDialogId === "import-preview") setImportCandidate(null);
-      if (activeDialogId === "clear-browser") setClearConfirm(false);
+      if (activeDialogId === "clear-browser") cancelClearDashboard();
       if (activeDialogId === "scenario-editor") {
         setEditor(null);
         setDeleteScenarioConfirm(false);
@@ -830,7 +992,7 @@ export default function Home() {
         element.inert = wasInert;
       });
     };
-  }, [activeDialogId]);
+  }, [activeDialogId, cancelClearDashboard]);
 
   useEffect(() => {
     if (activeDialogId || !dialogCycleRef.current) return;
@@ -892,6 +1054,20 @@ export default function Home() {
     editor && plan.scenarios.some((scenario) => scenario.id === editor.id),
   );
   const firstScenarioSetup = Boolean(editor && plan.scenarios.length === 0);
+  const optionCurrencyLocked = Boolean(
+    editor && (
+      editingExisting ||
+      editor.grossMonthly !== 0 ||
+      Object.values(editor.values).some((amount) => amount !== 0)
+    ),
+  );
+  const comparisonCurrencyLocked = Boolean(
+    modelDraft && (
+      modelDraft.scenarios.length > 0 ||
+      Object.values(modelDraft.sharedValues).some((amount) => amount !== 0) ||
+      modelDraft.excludedSupport.some((item) => item.monthlyBase !== 0)
+    ),
+  );
 
   const showStorageConflict = (
     snapshot: StoredPlanSnapshot,
@@ -1066,7 +1242,7 @@ export default function Home() {
         if (recovery.status === "available") {
           setStorageNotice({
             tone: "warning",
-            message: "A raw copy of an earlier unreadable browser draft is available. It may contain sensitive figures and cannot be imported as a complete comparison.",
+            message: RECOVERY_NOTICE_MESSAGE,
           });
         } else if (recovery.status === "invalid" || recovery.status === "unavailable") {
           setStorageNotice({
@@ -1083,8 +1259,8 @@ export default function Home() {
             setStorageNotice({
               tone: "seed",
               message: outcome === "seeded-with-recovery"
-                ? "The starter document replaced an unreadable browser draft after saving a raw copy. That copy may contain sensitive figures and cannot be imported as a complete comparison."
-                : "This running instance supplied the starter document. Later edits stay in this browser.",
+                ? RECOVERY_NOTICE_MESSAGE
+                : "Your comparison is ready and saved in this browser.",
             });
             notify("Starter comparison saved in this browser");
           }
@@ -1233,6 +1409,7 @@ export default function Home() {
         setStorageNotice(null);
         setRecoveryAvailable(false);
         setClearConfirm(false);
+        setCurrencyRestartDraft(null);
         setShareOpen(false);
         notify("All Wayfinder data was cleared from this browser");
       });
@@ -1281,6 +1458,18 @@ export default function Home() {
     notify("Editable Wayfinder document downloaded");
   };
 
+  const exportClearBackup = () => {
+    const exported = withFreshTimestamp(
+      currencyRestartDraft ? syncDocumentFields(currencyRestartDraft) : plan,
+    );
+    downloadText(
+      `wayfinder-${currencyRestartDraft ? "shared-settings-draft" : "document"}-${new Date().toISOString().slice(0, 10)}.json`,
+      JSON.stringify(exported, null, 2),
+      "application/json",
+    );
+    notify(currencyRestartDraft ? "Shared settings draft downloaded" : "Editable Wayfinder document downloaded");
+  };
+
   const downloadAgentTemplate = () => {
     const template = createWayfinderDocument(plan.baseCurrency);
     template.title = "Replace with a clear comparison title";
@@ -1290,7 +1479,7 @@ export default function Home() {
       "application/json",
     );
     setShareOpen(false);
-    notify("Agent-ready template downloaded");
+    notify("Blank comparison template downloaded");
   };
 
   const downloadFamilyView = () => {
@@ -1374,6 +1563,7 @@ export default function Home() {
     setModelDraft(null);
     setShareOpen(false);
     setClearConfirm(false);
+    setCurrencyRestartDraft(null);
     setImportCandidate(null);
     setImportIssues([]);
     setDeleteScenarioConfirm(false);
@@ -1450,7 +1640,7 @@ export default function Home() {
           ...current.fieldDefinitions,
           {
             id,
-            label: `New ${groupMeta[group].short.toLowerCase()} field`,
+            label: `New ${groupMeta[group].short.toLowerCase()} item`,
             description: "Describe what this monthly amount represents.",
             group,
             scope,
@@ -1460,7 +1650,7 @@ export default function Home() {
     });
   };
 
-  const removeModelField = (id: string) => {
+  const removeModelField = (id: string, confirmed = false) => {
     if (!modelDraft) return;
     const populated =
       (modelDraft.sharedValues[id] ?? 0) !== 0 ||
@@ -1470,7 +1660,7 @@ export default function Home() {
           (scenario.values[id] ?? 0) !== 0 ||
           hasMeaningfulEvidence(scenario.evidence[id]),
       );
-    if (populated && deleteFieldConfirm !== id) {
+    if (populated && !confirmed) {
       setDeleteFieldConfirm(id);
       return;
     }
@@ -1528,11 +1718,11 @@ export default function Home() {
           className={`storage-notice ${storageNotice?.tone ?? "warning"}`}
           role={storageNotice?.tone === "error" ? "alert" : "status"}
         >
-          <strong>{storageNotice?.tone === "error" ? "Browser save needs attention" : storageNotice?.tone === "seed" ? "Starter document loaded" : recoveryAvailable ? "Unreadable browser data saved" : "Browser data recovered"}</strong>
-          <span>{storageNotice?.message ?? "A raw copy of an earlier unreadable browser draft is available. It may contain sensitive figures and cannot be imported as a complete comparison."}</span>
+          <strong>{storageNotice?.tone === "error" ? "Browser save needs attention" : storageNotice?.tone === "seed" ? "Comparison ready" : recoveryAvailable ? "Old browser backup saved" : "Browser data restored"}</strong>
+          <span>{storageNotice?.message ?? RECOVERY_NOTICE_MESSAGE}</span>
           {recoveryAvailable && (
             <button type="button" className="storage-notice-action" onClick={downloadRecoveryCopy}>
-              Download unreadable-data copy
+              Download old backup
             </button>
           )}
         </div>
@@ -1561,19 +1751,18 @@ export default function Home() {
         <>
           <section className="hero" id="top">
             <div className="hero-copy">
-              <div className="eyebrow"><span className="pulse-dot" /> Local-first · {plan.baseCurrency} comparison</div>
+              <div className="eyebrow"><span className="pulse-dot" /> {visible.length} active {visible.length === 1 ? "option" : "options"} · amounts in {plan.baseCurrency}</div>
               <h1>See whether the next move <em>actually compounds.</em></h1>
-              <p>Every option uses the same field definitions, shared commitments, shared investment plan, and auditable gross-to-cash formula.</p>
+              <p>Compare every option using the same income, costs, and savings assumptions.</p>
               <div className="model-chips">
-                <span>{plan.fieldDefinitions.length} common fields</span>
-                <span>{formatMoney(sharedCommitmentTotal, plan.baseCurrency, plan.locale)} shared commitments</span>
-                <span>{formatMoney(sharedInvestmentTotal, plan.baseCurrency, plan.locale)} shared planned investments</span>
+                <span>{formatMoney(sharedCommitmentTotal, plan.baseCurrency, plan.locale)} monthly commitments used in every option</span>
+                <span>{formatMoney(sharedInvestmentTotal, plan.baseCurrency, plan.locale)} monthly investment target used in every option</span>
               </div>
             </div>
             <button className="model-summary-card" onClick={() => setModelDraft(cloneDocument(plan))}>
-              <span>Controlled from one place</span>
+              <span>Used in every option</span>
               <strong>Shared settings</strong>
-              <small>Edit fields, shared values, excluded support, projection assumptions, and sources.</small>
+              <small>Set shared costs, investments, growth, and sources.</small>
               <b>Open settings →</b>
             </button>
           </section>
@@ -1610,8 +1799,8 @@ export default function Home() {
 
           <section className="section-block scenarios-section">
             <div className="section-heading">
-              <div><span className="section-kicker">01 · Option tiles</span><h2>Gross to saving, fully explained</h2></div>
-              <p>Expand any tile to see every deduction, living cost, shared commitment, investment, source, and FX assumption.</p>
+              <div><span className="section-kicker">01 · Your options</span><h2>See income, costs, and monthly saving</h2></div>
+              <p>Open any option to see exactly where the money goes.</p>
             </div>
             <div className="scenario-selector" aria-label="Options included in comparisons">
               {derived.map((scenario) => (
@@ -1721,7 +1910,7 @@ export default function Home() {
                           <div className="saving-split-row" key={scenario.id}>
                             <div><strong>{scenario.label}</strong><span>{formatMoney(scenario.totalSavingBase, plan.baseCurrency, plan.locale)} total</span></div>
                             {hasDeficit ? (
-                              <div className="split-deficit">Deficit shown explicitly: investments + negative cash = total saving</div>
+                              <div className="split-deficit">Cash is below zero after costs; this option has a monthly shortfall.</div>
                             ) : (
                               <div className="split-rail"><i style={{ width: `${investmentPct}%`, background: scenario.color }} /><b /></div>
                             )}
@@ -1807,8 +1996,8 @@ export default function Home() {
 
               <section className="section-block research-section">
                 <div className="section-heading">
-                  <div><span className="section-kicker">05 · Source-backed research</span><h2>Official links and dated findings behind the assumptions</h2></div>
-                  <p>Agents and users can attach tax, visa, housing, childcare, transport, healthcare, weather, career, and family-travel research without turning qualitative findings into fake scores.</p>
+                  <div><span className="section-kicker">05 · Research and sources</span><h2>Sources behind the assumptions</h2></div>
+                  <p>Review the links used for taxes, visas, housing, childcare, transport, healthcare, weather, and jobs.</p>
                 </div>
                 {plan.researchItems.length ? (
                   <div className="research-grid">
@@ -1834,7 +2023,7 @@ export default function Home() {
 
               <section className="section-block ledger-section">
                 <div className="section-heading">
-                  <div><span className="section-kicker">06 · Full calculation</span><h2>One auditable formula for every option</h2></div>
+                  <div><span className="section-kicker">06 · How totals are calculated</span><h2>The same calculation for every option</h2></div>
                   <p>Gross − non-saving deductions − automatic investments = net cash. Total saving = automatic investments + net cash − living costs − commitments.</p>
                 </div>
                 <div className="matrix-wrap panel">
@@ -1874,6 +2063,17 @@ export default function Home() {
                     <p><strong>Investments:</strong> part of total saving; total saving always equals investments plus cash remaining.</p>
                     <p><strong>Accuracy:</strong> every input can be marked confirmed, estimated, or needing a source.</p>
                   </div>
+                  {plan.excludedSupport.length > 0 && (
+                    <div className="excluded-support-summary">
+                      <strong>External Help / Family Support received · context only</strong>
+                      <small>Shown for planning, but excluded from income, expenses, savings, charts, and rankings.</small>
+                      <div>
+                        {plan.excludedSupport.map((item) => (
+                          <p key={item.id}><span>{item.label}</span><b>{formatMoney(item.monthlyBase, plan.baseCurrency, plan.locale)}</b><small>{item.note || "No note recorded"}</small></p>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               </section>
             </>
@@ -1882,7 +2082,7 @@ export default function Home() {
       )}
 
       <footer className="footer">
-        <div><strong>Wayfinder</strong><span>Open-source, local-first relocation comparison</span></div>
+        <div><strong>Wayfinder</strong><span>Private relocation comparison</span></div>
         <div className="footer-actions">
           <button onClick={() => setModelDraft(cloneDocument(plan))}>Shared settings</button>
           {plan.scenarios.length > 0 && <button onClick={() => setShareOpen(true)}>Share / backup</button>}
@@ -1901,7 +2101,7 @@ export default function Home() {
             <div className="share-choices three-up">
               <article><span className="share-icon" aria-hidden="true">↗</span><div><h3>Family view</h3><p>A read-only HTML report with full calculations and assumptions. It works offline in a modern browser.</p></div><button className="button primary" onClick={downloadFamilyView}>Download family view</button></article>
               <article><span className="share-icon" aria-hidden="true">⇄</span><div><h3>Editable comparison file</h3><p>The complete comparison file: shared settings, every option, assumptions, evidence, and sources.</p></div><button className="button ghost" onClick={exportDocument}>Download editable comparison file</button></article>
-              <article><span className="share-icon" aria-hidden="true">◎</span><div><h3>Blank comparison template</h3><p>An empty JSON comparison template with every standard field, ready to fill in and preview before import.</p></div><button className="button ghost" onClick={downloadAgentTemplate}>Download blank comparison template</button></article>
+              <article><span className="share-icon" aria-hidden="true">◎</span><div><h3>Blank comparison template</h3><p>An empty JSON comparison template with all standard categories, ready to fill in and preview before import.</p></div><button className="button ghost" onClick={downloadAgentTemplate}>Download blank comparison template</button></article>
             </div>
             <div className="share-network-note"><strong>Import safety</strong><p>Wayfinder validates the entire file and shows a preview before replacement. No import silently overwrites the current dashboard.</p></div>
           </section>
@@ -1913,74 +2113,104 @@ export default function Home() {
           <button className="modal-dismiss" type="button" tabIndex={-1} aria-label="Close shared settings" onClick={() => setModelDraft(null)} />
           <form className="scenario-modal model-modal" role="dialog" aria-modal="true" aria-labelledby="model-title" data-dialog-id="comparison-model" tabIndex={-1} onSubmit={saveModel} onInvalidCapture={revealFirstInvalidControl} onChangeCapture={() => setFormNotice("")}>
             <div className="modal-head"><div><span className="section-kicker">Used by every option</span><h2 id="model-title">Shared settings</h2></div><button type="button" className="close-button" onClick={() => setModelDraft(null)} aria-label="Close shared settings">×</button></div>
-            <p className="modal-intro">Enter these settings once. Fields marked for each option are filled separately for every option, while shared amounts are entered once in the comparison currency.</p>
+            <p className="modal-intro">Enter these settings once. Monthly items for each option are filled separately, while shared amounts are entered once in the comparison currency.</p>
             {formNotice && <p className="form-error-summary" role="alert">{formNotice}</p>}
 
             <fieldset className="editor-section">
               <legend>Comparison and forecast settings</legend>
               <div className="form-grid">
                 <label className="wide"><span>Comparison title</span><input required value={modelDraft.title} onChange={(event) => setModelDraft({ ...modelDraft, title: event.target.value })} /></label>
-                <label><span>Base currency<small>Three-letter code used for comparisons</small></span><input required maxLength={3} disabled={modelDraft.scenarios.length > 0} value={modelDraft.baseCurrency} onChange={(event) => setModelDraft({ ...modelDraft, baseCurrency: currencyCode(event.target.value) })} /></label>
+                <label><span>Comparison currency<small>All options are compared in this currency</small></span><input required maxLength={3} disabled={comparisonCurrencyLocked} value={modelDraft.baseCurrency} onChange={(event) => setModelDraft({ ...modelDraft, baseCurrency: currencyCode(event.target.value) })} /></label>
                 <label><span>Number format<small>For example en-US or en-GB</small></span><input required value={modelDraft.locale} onChange={(event) => setModelDraft({ ...modelDraft, locale: event.target.value })} /></label>
                 <label><span>Annual income growth %</span><input required min="-25" max="100" step="0.1" type="number" value={modelDraft.projectionAssumptions.incomeGrowthPct} onChange={(event) => setModelDraft({ ...modelDraft, projectionAssumptions: { ...modelDraft.projectionAssumptions, incomeGrowthPct: Number(event.target.value) } })} /></label>
                 <label><span>Annual expense inflation %</span><input required min="-25" max="100" step="0.1" type="number" value={modelDraft.projectionAssumptions.expenseInflationPct} onChange={(event) => setModelDraft({ ...modelDraft, projectionAssumptions: { ...modelDraft.projectionAssumptions, expenseInflationPct: Number(event.target.value) } })} /></label>
                 <label><span>Projection years</span><input required min="1" max="20" step="1" type="number" value={modelDraft.projectionAssumptions.years} onChange={(event) => setModelDraft({ ...modelDraft, projectionAssumptions: { ...modelDraft.projectionAssumptions, years: Number(event.target.value) } })} /></label>
               </div>
-              {modelDraft.scenarios.length > 0 && <p className="field-note">Base currency is locked after options exist because changing it would invalidate every FX rate. Export, clear, or import a converted document to change it safely.</p>}
+              {comparisonCurrencyLocked && (
+                <div className="currency-restart-note">
+                  <p className="field-note">{modelDraft.scenarios.length > 0
+                    ? "The comparison currency stays fixed after options are added, so saved amounts cannot silently change meaning."
+                    : "The comparison currency stays fixed while shared or excluded-support amounts are entered, so those numbers cannot silently change meaning. Set those amounts to zero or start again to choose another currency."}</p>
+                  <button type="button" className="button ghost" onClick={() => { setCurrencyRestartDraft(cloneDocument(modelDraft)); setModelDraft(null); setClearConfirm(true); }}>Back up or start again with another currency</button>
+                </div>
+              )}
             </fieldset>
 
             {(Object.keys(groupMeta) as FieldGroup[]).map((group) => {
               const fields = modelDraft.fieldDefinitions.filter((field) => field.group === group);
               const allowShared = group === "commitment" || group === "plannedInvestment";
               return (
-                <fieldset className="editor-section model-fieldset" key={group}>
-                  <legend>{groupMeta[group].title}</legend>
-                  <p className="field-note">{groupMeta[group].help}</p>
+                <EditorSection
+                  key={group}
+                  title={groupMeta[group].title}
+                  note={groupMeta[group].help}
+                  collapsible={fields.length >= LONG_EDITOR_SECTION_SIZE}
+                  summary={`${fields.length} ${fields.length === 1 ? "item" : "items"}`}
+                >
                   <div className="model-field-list">
                     {fields.map((field) => (
-                      <div className="model-field-row" key={field.id}>
-                        <div className="field-copy">
-                          <input aria-label={`${groupMeta[group].short} field label`} required value={field.label} onChange={(event) => updateModelField(field.id, { label: event.target.value })} />
-                          <input aria-label={`${field.label} description`} value={field.description} onChange={(event) => updateModelField(field.id, { description: event.target.value })} />
+                      <Fragment key={field.id}>
+                        <div className="model-field-row">
+                          <div className="field-copy">
+                            <input aria-label={`${groupMeta[group].short} field label`} required value={field.label} onChange={(event) => updateModelField(field.id, { label: event.target.value })} />
+                            <input aria-label={`${field.label} description`} value={field.description} onChange={(event) => updateModelField(field.id, { description: event.target.value })} />
+                          </div>
+                          <span className={`scope-badge ${field.scope}`}>{field.scope === "shared" ? `Shared · ${modelDraft.baseCurrency}` : "Value per option"}</span>
+                          {field.scope === "shared" && (
+                            <div className="shared-amount">
+                              <label><span>Monthly amount in {modelDraft.baseCurrency}<small>Comparison currency</small></span><input aria-label={`${field.label} monthly amount in ${modelDraft.baseCurrency}, comparison currency`} min="0" step="any" type="number" value={modelDraft.sharedValues[field.id] ?? 0} onChange={(event) => setModelDraft({ ...modelDraft, sharedValues: { ...modelDraft.sharedValues, [field.id]: Number(event.target.value) } })} /></label>
+                              <EvidenceEditor evidence={modelDraft.sharedEvidence[field.id] ?? createUnknownEvidence()} onChange={(evidence) => setModelDraft({ ...modelDraft, sharedEvidence: { ...modelDraft.sharedEvidence, [field.id]: evidence } })} />
+                            </div>
+                          )}
+                          <button type="button" className="remove-field" onClick={() => removeModelField(field.id)}>Remove</button>
                         </div>
-                        <span className={`scope-badge ${field.scope}`}>{field.scope === "shared" ? `Shared · ${modelDraft.baseCurrency}` : "Value per option"}</span>
-                        {field.scope === "shared" && (
-                          <div className="shared-amount">
-                            <label><span>Monthly amount</span><input min="0" step="0.01" type="number" value={modelDraft.sharedValues[field.id] ?? 0} onChange={(event) => setModelDraft({ ...modelDraft, sharedValues: { ...modelDraft.sharedValues, [field.id]: Number(event.target.value) } })} /></label>
-                            <EvidenceEditor evidence={modelDraft.sharedEvidence[field.id] ?? createUnknownEvidence()} onChange={(evidence) => setModelDraft({ ...modelDraft, sharedEvidence: { ...modelDraft.sharedEvidence, [field.id]: evidence } })} />
+                        {deleteFieldConfirm === field.id && (
+                          <div className="field-removal-confirm" role="alert">
+                            <div>
+                              <strong>Remove “{field.label}”?</strong>
+                              <span>This removes the item, its amount, and its source details from Shared settings and all {modelDraft.scenarios.length} {modelDraft.scenarios.length === 1 ? "option" : "options"}.</span>
+                            </div>
+                            <button type="button" className="button ghost" onClick={exportDocument}>Download saved backup</button>
+                            <button type="button" className="button ghost" onClick={() => setDeleteFieldConfirm(null)}>Cancel</button>
+                            <button type="button" className="button danger" onClick={() => removeModelField(field.id, true)}>Confirm remove</button>
                           </div>
                         )}
-                        <button type="button" className="remove-field" onClick={() => removeModelField(field.id)}>{deleteFieldConfirm === field.id ? "Remove populated field" : "Remove"}</button>
-                      </div>
+                      </Fragment>
                     ))}
                   </div>
                   <div className="add-field-actions">
-                    <button type="button" className="button ghost" onClick={() => addModelField(group, "perOption")}>＋ Add field for each option</button>
-                    {allowShared && <button type="button" className="button ghost" onClick={() => addModelField(group, "shared")}>＋ Add shared field</button>}
+                    <button type="button" className="button ghost" onClick={() => addModelField(group, "perOption")}>＋ Add monthly item for each option</button>
+                    {allowShared && <button type="button" className="button ghost" onClick={() => addModelField(group, "shared")}>＋ Add one shared monthly item</button>}
                   </div>
-                </fieldset>
+                </EditorSection>
               );
             })}
 
-            <fieldset className="editor-section">
-              <legend>External Help / Family Support received · excluded from all calculations</legend>
-              <p className="field-note">Record it only for context. It will never increase income, reduce expenses, or change a chart.</p>
+            <EditorSection
+              title="External Help / Family Support received"
+              note="Record it only for context. It will never increase income, reduce expenses, savings, or charts."
+              collapsible
+              summary={`${modelDraft.excludedSupport.length} ${modelDraft.excludedSupport.length === 1 ? "note" : "notes"} · excluded from totals`}
+            >
               <div className="excluded-support-list">
                 {modelDraft.excludedSupport.map((item) => (
                   <div className="excluded-support-row" key={item.id}>
-                    <input aria-label="Excluded support label" value={item.label} onChange={(event) => setModelDraft({ ...modelDraft, excludedSupport: modelDraft.excludedSupport.map((candidate) => candidate.id === item.id ? { ...candidate, label: event.target.value } : candidate) })} />
-                    <input aria-label={`${item.label} monthly amount in ${modelDraft.baseCurrency}`} min="0" step="0.01" type="number" value={item.monthlyBase} onChange={(event) => setModelDraft({ ...modelDraft, excludedSupport: modelDraft.excludedSupport.map((candidate) => candidate.id === item.id ? { ...candidate, monthlyBase: Number(event.target.value) } : candidate) })} />
-                    <input aria-label={`${item.label} note`} value={item.note} placeholder="Context only" onChange={(event) => setModelDraft({ ...modelDraft, excludedSupport: modelDraft.excludedSupport.map((candidate) => candidate.id === item.id ? { ...candidate, note: event.target.value } : candidate) })} />
+                    <label><span>Name</span><input aria-label="Excluded support label" value={item.label} onChange={(event) => setModelDraft({ ...modelDraft, excludedSupport: modelDraft.excludedSupport.map((candidate) => candidate.id === item.id ? { ...candidate, label: event.target.value } : candidate) })} /></label>
+                    <label><span>Monthly amount in {modelDraft.baseCurrency}<small>Context only</small></span><input aria-label={`${item.label} monthly amount in ${modelDraft.baseCurrency}`} min="0" step="any" type="number" value={item.monthlyBase} onChange={(event) => setModelDraft({ ...modelDraft, excludedSupport: modelDraft.excludedSupport.map((candidate) => candidate.id === item.id ? { ...candidate, monthlyBase: Number(event.target.value) } : candidate) })} /></label>
+                    <label><span>Note</span><input aria-label={`${item.label} note`} value={item.note} placeholder="Who may help and what could change?" onChange={(event) => setModelDraft({ ...modelDraft, excludedSupport: modelDraft.excludedSupport.map((candidate) => candidate.id === item.id ? { ...candidate, note: event.target.value } : candidate) })} /></label>
                     <button type="button" onClick={() => setModelDraft({ ...modelDraft, excludedSupport: modelDraft.excludedSupport.filter((candidate) => candidate.id !== item.id) })}>Remove</button>
                   </div>
                 ))}
               </div>
               <button type="button" className="button ghost" onClick={() => setModelDraft({ ...modelDraft, excludedSupport: [...modelDraft.excludedSupport, { id: createStableId("excluded-support"), label: "Potential external support", monthlyBase: 0, note: "Excluded from every calculation." }] })}>＋ Add excluded support note</button>
-            </fieldset>
+            </EditorSection>
 
-            <fieldset className="editor-section research-editor-section">
-              <legend>Source-backed research records</legend>
-              <p className="field-note">Use official or primary sources where possible. Record the dated finding, source, and options it affects; research notes never change money totals by themselves.</p>
+            <EditorSection
+              title="Research and sources"
+              note="Use official or primary sources where possible. Record the dated finding, source, and options it affects; research notes never change money totals by themselves."
+              collapsible
+              summary={`${modelDraft.researchItems.length} ${modelDraft.researchItems.length === 1 ? "source" : "sources"}`}
+            >
               <div className="research-editor-list">
                 {modelDraft.researchItems.map((item) => (
                   <article className="research-editor-row" key={item.id}>
@@ -2004,7 +2234,7 @@ export default function Home() {
                 ))}
               </div>
               <button type="button" className="button ghost" onClick={() => setModelDraft({ ...modelDraft, researchItems: [...modelDraft.researchItems, { id: createStableId("research"), topic: "other", title: "New research finding", finding: "Describe what the source establishes and why it matters.", appliesToScenarioIds: [], status: "question", publisher: "", sourceTitle: "", sourceUrl: "", asOf: null, note: "" }] })}>＋ Add research record</button>
-            </fieldset>
+            </EditorSection>
 
             {modelDraft.migrationNotes.length > 0 && (
               <section className="migration-notes"><strong>Migration review needed</strong>{modelDraft.migrationNotes.map((note) => <p key={note}>{note}</p>)}</section>
@@ -2020,45 +2250,80 @@ export default function Home() {
           <button className="modal-dismiss" type="button" tabIndex={-1} aria-label="Close option editor" onClick={() => setEditor(null)} />
           <form className="scenario-modal" role="dialog" aria-modal="true" aria-labelledby="scenario-editor-title" data-dialog-id="scenario-editor" tabIndex={-1} onSubmit={saveScenario} onInvalidCapture={revealFirstInvalidControl} onChangeCapture={() => setFormNotice("")}>
             <div className="modal-head"><div><span className="section-kicker">{firstScenarioSetup ? "Current situation" : "Option editor"}</span><h2 id="scenario-editor-title">{firstScenarioSetup ? "Enter your current option" : editingExisting ? "Edit this option" : "Add a new option"}</h2></div><button type="button" className="close-button" onClick={() => setEditor(null)} aria-label="Close editor">×</button></div>
-            <p className="modal-intro">Amounts below use {editor.currency}. Shared settings keep every option on the same set of fields.</p>
+            <p className="modal-intro">Every amount shows both the option currency ({editor.currency}) and comparison currency ({plan.baseCurrency}). Edit either one; the linked amount updates automatically.</p>
             {formNotice && <p className="form-error-summary" role="alert">{formNotice}</p>}
 
             <fieldset className="editor-section">
-              <legend>Identity, currency, and gross compensation</legend>
+              <legend>Option, currency, and income</legend>
               <div className="form-grid">
-                <label className="wide"><span>Option name</span><input required value={editor.label} onChange={(event) => updateEditor("label", event.target.value)} /></label>
-                <label className="wide"><span>Location</span><input required value={editor.location} onChange={(event) => updateEditor("location", event.target.value)} /></label>
-                <label><span>Local currency</span><input required maxLength={3} value={editor.currency} onChange={(event) => { const currency = currencyCode(event.target.value); setEditor({ ...editor, currency, fx: currency === plan.baseCurrency ? { ...editor.fx, rateToBase: 1, source: "Base currency" } : editor.fx }); }} /></label>
-                <label><span>1 local currency in {plan.baseCurrency}</span><input required min="0.00000001" step="0.00000001" type="number" disabled={editor.currency === plan.baseCurrency} value={editor.fx.rateToBase} onChange={(event) => updateEditor("fx", { ...editor.fx, rateToBase: Number(event.target.value) })} /></label>
+                <label className="wide"><span>Option name</span><input required placeholder="For example: Current household" value={editor.label} onChange={(event) => updateEditor("label", event.target.value)} /></label>
+                <label className="wide"><span>Location</span><input required placeholder="City and country" value={editor.location} onChange={(event) => updateEditor("location", event.target.value)} /></label>
+                <label className="wide"><span>Income summary</span><input required placeholder="Who is working and which income is included?" value={editor.employment} onChange={(event) => updateEditor("employment", event.target.value)} /></label>
+                <label><span>Option currency<small>{optionCurrencyLocked ? "Locked so existing amounts cannot be reinterpreted. Add a new option to use another currency." : "Choose before entering salary or costs"}</small></span><input required maxLength={3} disabled={optionCurrencyLocked} value={editor.currency} onChange={(event) => { const currency = currencyCode(event.target.value); setEditor({ ...editor, currency, fx: fxAfterCurrencyChange(editor.currency, currency, plan.baseCurrency, editor.fx) }); }} /></label>
+                <label><span>Exchange rate<small>1 {editor.currency || "option currency"} in {plan.baseCurrency}</small></span><input required min="0.00000001" step="any" type="number" disabled={editor.currency === plan.baseCurrency} value={editor.fx.rateToBase} onChange={(event) => updateEditor("fx", { ...editor.fx, rateToBase: Number(event.target.value) })} /></label>
                 <label><span>FX as of{editor.currency !== plan.baseCurrency ? " · required" : ""}</span><input required={editor.currency !== plan.baseCurrency} type="date" value={editor.fx.asOf ?? ""} onChange={(event) => updateEditor("fx", { ...editor.fx, asOf: event.target.value || null })} /></label>
                 <label className="wide"><span>FX source{editor.currency !== plan.baseCurrency ? " · required" : ""}</span><input required={editor.currency !== plan.baseCurrency} value={editor.fx.source} onChange={(event) => updateEditor("fx", { ...editor.fx, source: event.target.value })} /></label>
-                <label className="wide"><span>Monthly gross compensation<small>Before deductions; include only components counted in the model</small></span><input required min="0" step="0.01" type="number" value={editor.grossMonthly} onChange={(event) => updateEditor("grossMonthly", Number(event.target.value))} /></label>
               </div>
+              <CurrencyAmountEditor
+                key={`gross-${editor.currency}-${plan.baseCurrency}`}
+                id="gross-monthly"
+                label="Monthly gross compensation"
+                description="Before deductions; include only salary and benefits counted here."
+                localAmount={editor.grossMonthly}
+                localCurrency={editor.currency}
+                baseCurrency={plan.baseCurrency}
+                rateToBase={editor.fx.rateToBase}
+                onChangeLocal={(amount) => updateEditor("grossMonthly", amount)}
+              />
               <EvidenceEditor evidence={editor.evidence.grossMonthly ?? createUnknownEvidence()} onChange={(evidence) => updateEditorEvidence("grossMonthly", evidence)} title="Gross compensation accuracy and source" />
             </fieldset>
 
             {(Object.keys(groupMeta) as FieldGroup[]).map((group) => {
               const fields = plan.fieldDefinitions.filter((field) => field.group === group && field.scope === "perOption");
-              if (!fields.length) return null;
+              const sharedFields = plan.fieldDefinitions.filter((field) => field.group === group && field.scope === "shared");
+              if (!fields.length && !sharedFields.length) return null;
+              const groupTotal = fields.reduce((total, field) => total + (editor.values[field.id] ?? 0), 0);
+              const sectionSummary = fields.length
+                ? `${fields.length} monthly ${fields.length === 1 ? "item" : "items"} · ${formatMoney(groupTotal, editor.currency, plan.locale)}${sharedFields.length ? ` · ${sharedFields.length} shared` : ""}`
+                : `${sharedFields.length} shared monthly ${sharedFields.length === 1 ? "item" : "items"}`;
               return (
-                <fieldset className="editor-section" key={group}>
-                  <legend>{groupMeta[group].title}</legend>
-                  <p className="field-note">{groupMeta[group].help}</p>
-                  <div className="amount-field-list">
+                <EditorSection
+                  key={group}
+                  title={groupMeta[group].title}
+                  note={groupMeta[group].help}
+                  collapsible={fields.length >= LONG_EDITOR_SECTION_SIZE}
+                  summary={sectionSummary}
+                >
+                  {fields.length > 0 && <div className="amount-field-list">
                     {fields.map((field) => (
                       <div className="amount-field-row" key={field.id}>
-                        <label><span>{field.label}<small>{field.description}</small></span><input required min="0" step="0.01" type="number" value={fieldValue(plan, editor, field)} onChange={(event) => updateEditorValue(field.id, Number(event.target.value))} /></label>
+                        <CurrencyAmountEditor
+                          key={`${field.id}-${editor.currency}-${plan.baseCurrency}`}
+                          id={`option-${field.id}`}
+                          label={field.label}
+                          description={field.description}
+                          localAmount={editor.values[field.id] ?? 0}
+                          localCurrency={editor.currency}
+                          baseCurrency={plan.baseCurrency}
+                          rateToBase={editor.fx.rateToBase}
+                          onChangeLocal={(amount) => updateEditorValue(field.id, amount)}
+                        />
                         <EvidenceEditor evidence={editor.evidence[field.id] ?? createUnknownEvidence()} onChange={(evidence) => updateEditorEvidence(field.id, evidence)} />
                       </div>
                     ))}
-                  </div>
-                  {plan.fieldDefinitions.some((field) => field.group === group && field.scope === "shared") && (
+                  </div>}
+                  {sharedFields.length > 0 && (
                     <div className="shared-preview-list">
                       <strong>Applied automatically from Shared settings</strong>
-                      {plan.fieldDefinitions.filter((field) => field.group === group && field.scope === "shared").map((field) => <span key={field.id}>{field.label}<b>{formatMoney(plan.sharedValues[field.id] ?? 0, plan.baseCurrency, plan.locale)}</b></span>)}
+                      <small>These are stored once in {plan.baseCurrency}. The {editor.currency} amount below is the linked local equivalent.</small>
+                      {sharedFields.map((field) => {
+                        const baseAmount = plan.sharedValues[field.id] ?? 0;
+                        const localAmount = baseToLocalAmount(baseAmount, editor.currency === plan.baseCurrency ? 1 : editor.fx.rateToBase);
+                        return <span key={field.id}><span>{field.label}</span><b>{formatMoney(baseAmount, plan.baseCurrency, plan.locale)}<small>{localAmount === null ? `Enter the ${editor.currency} exchange rate` : formatMoney(localAmount, editor.currency, plan.locale)}</small></b></span>;
+                      })}
                     </div>
                   )}
-                </fieldset>
+                </EditorSection>
               );
             })}
 
@@ -2075,7 +2340,6 @@ export default function Home() {
               <div className="form-grid">
                 <label><span>Country code / badge</span><input maxLength={3} value={editor.flag} onChange={(event) => updateEditor("flag", event.target.value.toUpperCase())} /></label>
                 <label><span>Status</span><input value={editor.status} onChange={(event) => updateEditor("status", event.target.value)} /></label>
-                <label className="wide"><span>Income summary</span><input value={editor.employment} onChange={(event) => updateEditor("employment", event.target.value)} /></label>
                 <label><span>Household earners included</span><input required min="0" max="20" step="1" type="number" value={editor.earners} onChange={(event) => updateEditor("earners", Number(event.target.value))} /></label>
                 <label><span>Card colour</span><input className="color-input" type="color" value={editor.color} onChange={(event) => updateEditor("color", event.target.value)} /></label>
               </div>
@@ -2084,17 +2348,26 @@ export default function Home() {
             <details className="editor-details">
               <summary>Qualitative assumptions <span>Preserved in comparisons and exports</span></summary>
               <div className="form-grid">
-                <label className="wide"><span>Spouse income assumption</span><input value={editor.spouseJob} onChange={(event) => updateEditor("spouseJob", event.target.value)} /></label>
-                <label className="wide"><span>Childcare assumption</span><input value={editor.childcare} onChange={(event) => updateEditor("childcare", event.target.value)} /></label>
-                <label className="wide"><span>Transport assumption</span><input value={editor.transport} onChange={(event) => updateEditor("transport", event.target.value)} /></label>
-                <label className="wide"><span>Residence / visa assumption</span><input value={editor.residency} onChange={(event) => updateEditor("residency", event.target.value)} /></label>
-                <label className="wide"><span>Bonus treatment<small>Excluded unless converted into recurring monthly inputs</small></span><input value={editor.bonus} onChange={(event) => updateEditor("bonus", event.target.value)} /></label>
+                <label className="wide"><span>Spouse income assumption</span><input placeholder="For example: not included until a job is secured" value={editor.spouseJob} onChange={(event) => updateEditor("spouseJob", event.target.value)} /></label>
+                <label className="wide"><span>Childcare assumption</span><input placeholder="Who provides care and what cost is included?" value={editor.childcare} onChange={(event) => updateEditor("childcare", event.target.value)} /></label>
+                <label className="wide"><span>Transport assumption</span><input placeholder="Public transport, car, or a mix" value={editor.transport} onChange={(event) => updateEditor("transport", event.target.value)} /></label>
+                <label className="wide"><span>Residence / visa assumption</span><input placeholder="Visa status, timing, or residency condition" value={editor.residency} onChange={(event) => updateEditor("residency", event.target.value)} /></label>
+                <label className="wide"><span>Bonus treatment<small>Excluded unless converted into recurring monthly inputs</small></span><input placeholder="State whether and how bonus is counted" value={editor.bonus} onChange={(event) => updateEditor("bonus", event.target.value)} /></label>
                 <label className="wide"><span>Benefits included or confirmed · one per line</span><textarea rows={3} value={editor.benefits.join("\n")} onChange={(event) => updateEditor("benefits", event.target.value.split("\n").filter(Boolean))} /></label>
                 <label className="wide"><span>Important uncertainties · one per line</span><textarea rows={3} value={editor.risks.join("\n")} onChange={(event) => updateEditor("risks", event.target.value.split("\n").filter(Boolean))} /></label>
               </div>
             </details>
 
-            {deleteScenarioConfirm && <div className="inline-danger"><strong>Remove this option from this browser?</strong><span>This cannot be undone unless you downloaded a backup.</span><button type="button" onClick={deleteScenario}>Confirm removal</button></div>}
+            {deleteScenarioConfirm && (
+              <div className="inline-danger" role="alert">
+                <div><strong>Remove this option from this browser?</strong><span>This cannot be undone unless you downloaded a backup.</span></div>
+                <div className="inline-danger-actions">
+                  <button type="button" className="button ghost" onClick={exportDocument}>Download saved backup</button>
+                  <button type="button" className="button ghost" onClick={() => setDeleteScenarioConfirm(false)}>Cancel</button>
+                  <button type="button" className="button danger" onClick={deleteScenario}>Confirm removal</button>
+                </div>
+              </div>
+            )}
             <div className="modal-actions">
               {editingExisting && <button type="button" className="button danger" onClick={() => setDeleteScenarioConfirm(true)}>Remove option</button>}
               <span />
@@ -2110,7 +2383,7 @@ export default function Home() {
           <button className="modal-dismiss" type="button" tabIndex={-1} aria-label="Close import preview" onClick={() => setImportCandidate(null)} />
           <section className="share-modal import-modal" role="dialog" aria-modal="true" aria-labelledby="import-title" data-dialog-id="import-preview" tabIndex={-1}>
             <div className="modal-head"><div><span className="section-kicker">Check before replacing</span><h2 id="import-title">Replace this browser’s complete comparison?</h2></div><button className="close-button" onClick={() => setImportCandidate(null)} aria-label="Close import preview">×</button></div>
-            <div className="import-summary"><div><span>Title</span><strong>{importCandidate.document.title}</strong></div><div><span>Base currency</span><strong>{importCandidate.document.baseCurrency}</strong></div><div><span>Options</span><strong>{importCandidate.document.scenarios.length}</strong></div><div><span>Common fields</span><strong>{importCandidate.document.fieldDefinitions.length}</strong></div></div>
+            <div className="import-summary"><div><span>Title</span><strong>{importCandidate.document.title}</strong></div><div><span>Comparison currency</span><strong>{importCandidate.document.baseCurrency}</strong></div><div><span>Options</span><strong>{importCandidate.document.scenarios.length}</strong></div><div><span>Sources</span><strong>{importCandidate.document.researchItems.length}</strong></div></div>
             {importCandidate.migrated && <p className="migration-warning">This older Wayfinder file was migrated without changing its stored totals. Review migration notes and sources after import.</p>}
             <p className="modal-intro">This complete comparison file includes and replaces shared settings, your current situation, all options, assumptions, evidence, and sources. Nothing changes until you confirm; it replaces everything, with no partial merge.</p>
             <div className="modal-actions"><button className="button ghost" onClick={exportDocument}>Download current backup first</button><span /><button className="button ghost" onClick={() => setImportCandidate(null)}>Cancel</button><button className="button primary" onClick={confirmImport}>Replace complete comparison</button></div>
@@ -2122,7 +2395,7 @@ export default function Home() {
         <div className="modal-backdrop">
           <button className="modal-dismiss" type="button" tabIndex={-1} aria-label="Close import errors" onClick={() => setImportIssues([])} />
           <section className="share-modal import-modal" role="dialog" aria-modal="true" aria-labelledby="import-error-title" data-dialog-id="import-errors" tabIndex={-1}>
-            <div className="modal-head"><div><span className="section-kicker">Import rejected safely</span><h2 id="import-error-title">Fix these document fields</h2></div><button className="close-button" onClick={() => setImportIssues([])} aria-label="Close import errors">×</button></div>
+            <div className="modal-head"><div><span className="section-kicker">Import could not continue</span><h2 id="import-error-title">Fix these fields</h2></div><button className="close-button" onClick={() => setImportIssues([])} aria-label="Close import errors">×</button></div>
             <ol className="validation-list">{importIssues.slice(0, 20).map((issue, index) => <li key={`${issue.path}-${index}`}><code>{issue.path}</code><span>{issue.message}</span></li>)}</ol>
             {importIssues.length > 20 && <p className="modal-intro">{importIssues.length - 20} more issues were omitted. Use the repository validator for the complete list.</p>}
             <div className="modal-actions"><span /><button className="button primary" onClick={() => setImportIssues([])}>Close</button></div>
@@ -2132,11 +2405,12 @@ export default function Home() {
 
       {clearConfirm && (
         <div className="modal-backdrop">
-          <button className="modal-dismiss" type="button" tabIndex={-1} aria-label="Cancel clearing browser data" onClick={() => setClearConfirm(false)} />
+          <button className="modal-dismiss" type="button" tabIndex={-1} aria-label="Cancel clearing browser data" onClick={cancelClearDashboard} />
           <section className="share-modal confirm-modal" role="dialog" aria-modal="true" aria-labelledby="clear-title" data-dialog-id="clear-browser" tabIndex={-1}>
-            <div className="modal-head"><div><span className="section-kicker">Local data deletion</span><h2 id="clear-title">Clear this browser?</h2></div><button className="close-button" onClick={() => setClearConfirm(false)} aria-label="Cancel clearing browser data">×</button></div>
+            <div className="modal-head"><div><span className="section-kicker">Local data deletion</span><h2 id="clear-title">Clear this browser?</h2></div><button className="close-button" onClick={cancelClearDashboard} aria-label="Cancel clearing browser data">×</button></div>
             <p className="modal-intro">This removes shared settings, every option, excluded-support notes, sources, and any local recovery copy from this browser. The public application repository is unaffected.</p>
-            <div className="modal-actions"><button className="button ghost" onClick={exportDocument}>Download backup first</button><span /><button className="button ghost" onClick={() => setClearConfirm(false)}>Cancel</button><button className="button danger" onClick={clearDashboard}>Clear all local data</button></div>
+            {currencyRestartDraft && <p className="modal-intro">Your open Shared settings edits are preserved here. Cancel returns to them. Download the draft before clearing if you want a copy.</p>}
+            <div className="modal-actions"><button className="button ghost" onClick={exportClearBackup}>{currencyRestartDraft ? "Download draft backup" : "Download backup first"}</button><span /><button className="button ghost" onClick={cancelClearDashboard}>Cancel</button><button className="button danger" onClick={clearDashboard}>Clear all local data</button></div>
           </section>
         </div>
       )}

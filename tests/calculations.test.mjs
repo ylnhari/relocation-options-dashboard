@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { deriveScenario, projectScenario } from "../app/scenario-math.ts";
+import { baseToLocalAmount } from "../app/currency-input.ts";
 import {
   DEFAULT_SCENARIOS,
+  createBlankScenario,
   createCurrentScenario,
   createScenarioId,
   createWayfinderDocument,
@@ -31,6 +33,7 @@ function rounded(value) {
 test("new documents have no household financial defaults", () => {
   const document = createWayfinderDocument();
   const starter = createCurrentScenario(document);
+  const alternative = createBlankScenario(document);
 
   assert.deepEqual(DEFAULT_SCENARIOS, []);
   assert.equal(document.baseCurrency, "USD");
@@ -39,6 +42,16 @@ test("new documents have no household financial defaults", () => {
   assert.equal(starter.grossMonthly, 0);
   assert.ok(Object.values(starter.values).every((value) => value === 0));
   assert.equal(deriveScenario(document, starter).totalSavingBase, 0);
+  for (const scenario of [starter, alternative]) {
+    assert.equal(scenario.label, "");
+    assert.equal(scenario.location, "");
+    assert.equal(scenario.employment, "");
+    assert.equal(scenario.spouseJob, "");
+    assert.equal(scenario.childcare, "");
+    assert.equal(scenario.transport, "");
+    assert.equal(scenario.residency, "");
+    assert.equal(scenario.bonus, "");
+  }
 });
 
 test("creates scenario IDs when randomUUID is unavailable", () => {
@@ -135,6 +148,37 @@ test("applies shared commitments and planned investments once in base currency",
   assert.equal(inr.sharedPlannedInvestmentBase, 350);
   assert.equal(cad.breakdown.commitment[0].localAmount, 800 / 0.75);
   assert.equal(inr.breakdown.commitment[0].localAmount, 800 / 0.0125);
+});
+
+test("a comparison-currency edit produces the same canonical option totals", () => {
+  const document = createDocument({
+    sharedValues: {
+      "shared-debt": 175.25,
+      "shared-remittances": 0,
+      "shared-other-commitment": 0,
+      "shared-market-investing": 0,
+      "shared-other-investing": 0,
+    },
+  });
+  const rateToBase = 0.731234567;
+  const grossBaseInput = 8_765.43;
+  const housingBaseInput = 1_987.65;
+  const grossLocal = baseToLocalAmount(grossBaseInput, rateToBase);
+  const housingLocal = baseToLocalAmount(housingBaseInput, rateToBase);
+  const result = deriveScenario(document, createScenario(document, {
+    currency: "CAD",
+    fx: { rateToBase, asOf: "2026-01-01", source: "Synthetic FX" },
+    grossMonthly: grossLocal,
+    values: { "living-housing": housingLocal },
+  }));
+
+  assert.equal(rounded(result.grossBase), rounded(grossBaseInput));
+  assert.equal(rounded(result.livingBase), rounded(housingBaseInput));
+  assert.equal(result.sharedCommitmentBase, 175.25);
+  assert.equal(
+    rounded(result.totalSavingBase),
+    rounded(result.totalInvestmentBase + result.cashRemainingBase),
+  );
 });
 
 test("includes option-specific commitments and planned investments only for that option", () => {
