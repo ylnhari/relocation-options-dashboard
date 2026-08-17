@@ -7,7 +7,7 @@ their browser.
 
 It is built for two equally supported workflows:
 
-- **Manual:** define the comparison model once, then fill each option.
+- **Manual:** enter shared settings once, then fill the current situation and each alternative.
 - **Agentic:** give an agent the versioned template and JSON Schema, validate
   the completed document, preview it, and import it atomically.
 
@@ -90,6 +90,39 @@ launcher checks `WAYFINDER_PORT`, an optional generic `ports.json`, then uses
 the clone-safe fallback `8780`. It binds to loopback and never scans for a
 different port.
 
+### Optional Windows runtime starter document
+
+To open one local running instance with an already-validated v4 document:
+
+```bash
+python scripts/dev.py --document path/to/wayfinder-document.json
+```
+
+This launcher feature is available on Windows only. On macOS and Linux, use the
+browser's **Import complete comparison** flow instead; browser import works on
+every supported platform. `WAYFINDER_DOCUMENT=path/to/wayfinder-document.json` is the equivalent when
+the flag is omitted; `--document` wins when both are present. The launcher
+copies the exact bounded input into an ignored local runtime artifact, validates
+it with the same schema and semantic path as imports, and enables it only for
+that child development process. Production builds and previews ignore seed
+control variables, so a starter document cannot be compiled into public assets.
+A normal `npm run dev`, `npm run build`, `npm start`, or launcher run without a
+document remains empty.
+
+The seed is delivered to every browser that can reach that running instance.
+Use it only on loopback or behind a trusted authenticated gateway. A valid
+saved browser plan always wins; otherwise the starter is saved to that browser
+through the normal guarded local-storage path, and later edits remain there.
+Each launcher owns and cleans up only its own opaque ignored seed artifact, so
+concurrent or unseeded starts do not delete another running instance's file. A
+per-seed process lease lets a later launcher reclaim an artifact left by a
+crashed process without touching a live owner.
+
+On Windows, the seeded launcher also establishes kill-on-close process-tree
+containment before it creates the artifact and records the launcher's process
+creation identity to distinguish PID reuse. If containment is unavailable, the
+seeded start fails closed; manual browser import remains available.
+
 ### Optional public metadata origin
 
 Hosted deployments may set the public, non-secret `WAYFINDER_PUBLIC_ORIGIN`
@@ -104,7 +137,7 @@ request `Host` and forwarded-host headers are never used.
 
 ### Manual setup
 
-1. Choose **Set up manually**.
+1. Choose **Enter my details**.
 2. Select the base currency, review the standard fields, and enter shared
    commitments and investment targets once.
 3. Enter the current situation, including gross, deductions, automatic
@@ -127,14 +160,14 @@ request `Host` and forwarded-host headers are never used.
 4. Import it. Wayfinder validates the entire document and shows a summary before
    any existing browser data is replaced.
 
-The browser export and agent document are the same format. There is no hidden
-agent API or alternate data model.
+The browser export and an agent-completed comparison use the same format. There
+is no hidden agent API or alternate calculation path.
 
 ## Standard contract files
 
 - [JSON Schema](schemas/wayfinder-document.v4.schema.json)
 - [Fictional worked example](examples/wayfinder.example.json)
-- [Empty agent template](examples/wayfinder.template.json)
+- [Empty comparison template](examples/wayfinder.template.json)
 - [Agent workflow](docs/AGENT-WORKFLOW.md)
 - [Research methodology](docs/RESEARCH-METHODOLOGY.md)
 - [Official-source directory](docs/OFFICIAL-SOURCE-DIRECTORY.md)
@@ -161,8 +194,10 @@ byte-for-byte drift check so an outdated generated validator cannot pass CI.
 
 - **Family view:** a self-contained, read-only HTML report with calculations,
   breakdowns, evidence, research, and assumptions.
-- **Editable document:** the complete versioned JSON source of truth.
-- **Agent template:** an empty document with the standard field model.
+- **Editable comparison file:** the complete versioned JSON containing shared
+  settings, the current situation, every alternative, assumptions, evidence,
+  and sources.
+- **Blank comparison template:** an empty JSON file with the standard fields.
 
 These files can contain sensitive financial data. The user chooses when and
 with whom to share them. GitHub hosts only the application code, schema,

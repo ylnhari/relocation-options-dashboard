@@ -8,6 +8,32 @@ A document can contain compensation assumptions, household costs, ongoing commit
 
 Treat both formats as sensitive. Keep them out of public repositories, issue trackers, chat transcripts, screenshots, and shared devices. The repository contains only empty defaults and fictional examples.
 
+## Optional runtime starter document
+
+`python scripts/dev.py --document <path>` is deliberately opt-in and available
+on Windows only. On other platforms, use the browser import flow, which works
+everywhere. On Windows it copies a
+validated v4 document to an ignored local artifact and supplies it to every
+browser that can reach that one running instance. This is convenient for a
+trusted local session, but it is not access control: use loopback only, or put
+remote access behind a trusted authenticated gateway. The source path is never
+sent to the browser. Each seeded launcher owns and removes only its own ignored
+artifact when it exits; an unseeded or concurrent launch never deletes another
+running instance's artifact. A small per-seed PID lease lets the next launcher
+remove only artifacts whose recorded owner has exited. Malformed or unreadable
+leases are preserved fail-safe; confirm no seeded process is active before
+manually removing such leftovers from `.local/`.
+
+On Windows, a seeded launcher joins a kill-on-close Job Object before creating
+the private artifact. This keeps its npm/Node process tree tied to the
+launcher's lifetime, and the lease records process creation identity as well as
+PID. If containment cannot be established, the seeded start fails before an
+artifact is created.
+
+Seed validation errors use a constant label and never print the source path or
+filename. Production builds and previews ignore runtime-seed control variables;
+only the explicit local development launcher can inject a starter document.
+
 ## Local storage and deletion
 
 Browser storage is specific to the browser profile and device. Clearing the dashboard removes the stored Wayfinder documents from that browser; it cannot remove copies previously exported or shared. Export a backup before clearing if one is needed.

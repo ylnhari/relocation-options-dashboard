@@ -18,6 +18,29 @@ This prevents a continuing obligation from being accidentally converted or dupli
 
 The dashboard restores its v4 document from browser storage and writes changes back there. Export produces the complete editable JSON document. The family export is a read-only HTML rendering of the same model; it has no interactive controls and uses a restrictive content policy.
 
+An explicitly launched Windows runtime seed is an optional local bootstrap, not another
+storage or document format. `scripts/dev.py --document <path>` first makes a
+bounded exact copy in an opaque per-launch file under ignored `.local/`, validates that copy through
+`validateWayfinderInput`, then enables build-time injection only in its child
+process. The launcher rejects this seed mode on non-Windows platforms; browser
+import remains the portable path. Client initialization validates and synchronizes the injected v4
+document again. A valid browser plan wins; an empty or damaged browser store may
+receive the seed only through the existing locked, validated persistence path.
+The seed source path is never part of client code, and public builds remain
+empty unless the launcher explicitly enables a seed. Each launcher removes
+only its own artifact. An exclusive per-seed PID lease distinguishes a live owner
+from a dead process during later cleanup, so concurrent launches never share a
+mutable manifest or delete each other's files.
+
+Windows seeded launches establish `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`
+containment before writing a seed and keep the lease owned by that launcher for
+its full lifetime. Its npm and Node descendants therefore cannot outlive a
+forcibly terminated launcher. The lease also stores the Windows process
+creation time, preventing PID reuse from masquerading as the original owner.
+Vite accepts runtime starter injection only for `serve` in development mode;
+build and preview paths ignore the seed controls even when inherited from an
+operator environment.
+
 Import parses the selected JSON, validates it or migrates a supported legacy shape, synchronizes document fields, and shows a summary for confirmation. The existing dashboard is unchanged until confirmation. Confirmation replaces the full document atomically; v4 does not partially merge fields because that could double-count shared entries.
 
 ## Compatibility

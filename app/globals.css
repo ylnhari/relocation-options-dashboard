@@ -111,9 +111,25 @@ textarea:focus-visible {
   padding: 12px 14px;
 }
 .storage-notice strong { flex: 0 0 auto; color: var(--gold); font-size: 10px; }
-.storage-notice span { color: var(--muted-strong); font-size: 9px; line-height: 1.5; }
+.storage-notice span { flex: 1; color: var(--muted-strong); font-size: 9px; line-height: 1.5; }
+.storage-notice.seed { border-color: rgba(100, 216, 203, 0.34); background: rgba(100, 216, 203, 0.065); }
+.storage-notice.seed strong { color: var(--aqua); }
 .storage-notice.error { border-color: rgba(255, 121, 108, 0.34); background: rgba(255, 121, 108, 0.065); }
 .storage-notice.error strong { color: var(--coral); }
+.storage-notice-action {
+  min-height: 44px;
+  flex: 0 0 auto;
+  align-self: center;
+  border: 1px solid rgba(100, 216, 203, 0.35);
+  border-radius: 10px;
+  background: rgba(100, 216, 203, 0.08);
+  color: var(--aqua);
+  padding: 9px 13px;
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 700;
+}
+.storage-notice-action:hover { background: rgba(100, 216, 203, 0.14); }
 
 .brand {
   min-height: 44px;

@@ -33,8 +33,9 @@ test("server-renders an empty, local-first v4 first run", async () => {
   const html = await response.text();
   assert.match(html, /<title>Wayfinder · Relocation Decision Studio<\/title>/i);
   assert.match(html, /Open source · private on your device/i);
-  assert.match(html, /Set up manually/i);
-  assert.match(html, /Import agent document/i);
+  assert.match(html, /Enter my details/i);
+  assert.match(html, /Import complete comparison/i);
+  assert.match(html, /Download blank comparison template/i);
   assert.match(html, /No sign-in, cloud database, or telemetry/i);
   assert.match(html, /Your figures stay in this browser/i);
 
@@ -47,14 +48,17 @@ test("server-renders an empty, local-first v4 first run", async () => {
 });
 
 test("keeps the v4 model, import contract, calculations, and sharing flows public-safe", async () => {
-  const [page, scenarios, document, layout, privacy] = await Promise.all([
+  const [page, scenarios, document, layout, privacy, runtimeSeed, viteConfig, launcher] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/scenarios.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/document.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
     readFile(new URL("../PRIVACY.md", import.meta.url), "utf8"),
+    readFile(new URL("../app/runtime-seed.ts", import.meta.url), "utf8"),
+    readFile(new URL("../vite.config.ts", import.meta.url), "utf8"),
+    readFile(new URL("../scripts/dev.py", import.meta.url), "utf8"),
   ]);
-  const publicSource = [page, scenarios, document, layout, privacy].join("\n");
+  const publicSource = [page, scenarios, document, layout, privacy, runtimeSeed, viteConfig, launcher].join("\n");
 
   // A new public clone starts with the full field model but no household options.
   assert.match(scenarios, /SCHEMA_VERSION\s*=\s*4/);
@@ -63,9 +67,13 @@ test("keeps the v4 model, import contract, calculations, and sharing flows publi
   assert.match(scenarios, /sharedValues: createEmptySharedValues\(fields\)/);
   assert.match(scenarios, /sharedEvidence: createSharedEvidence\(fields\)/);
   assert.match(scenarios, /scope: "shared"/);
-  assert.match(page, /Comparison model/);
-  assert.match(page, /Manual or agent input/);
-  assert.match(page, /same validated document contract/);
+  assert.match(page, /Shared settings/);
+  assert.match(page, /Add your options/);
+  assert.match(page, /Review the comparison/);
+  assert.match(page, /one JSON file containing shared settings, your current situation, all alternatives, assumptions, and sources/);
+  assert.doesNotMatch(page, />Comparison model</);
+  assert.doesNotMatch(page, />Manual or agent input</);
+  assert.doesNotMatch(page, /same validated document contract/);
 
   // Browser persistence parses current and legacy values independently, never
   // autosaves the empty first render, and updates React state only after a
@@ -79,6 +87,45 @@ test("keeps the v4 model, import contract, calculations, and sharing flows publi
   assert.match(page, /validateWayfinderInput\(synced\)[\s\S]*serialized = JSON\.stringify\(result\.document\)[\s\S]*localStorage\.setItem\(STORAGE_KEY, serialized\)[\s\S]*setPlan\(result\.document\)/);
   assert.match(page, /Could not save\. Your previous dashboard is still unchanged/);
   assert.match(page, /localStorage\.removeItem\(STORAGE_KEY\)/);
+  assert.match(page, /shouldApplyRuntimeSeed\(snapshot\.status, runtimeSeed\)/);
+  assert.match(page, /applyRuntimeSeed\(runtimeSeed\.document\)/);
+  assert.match(page, /const latest = inspectBrowserStorage\(\)[\s\S]*latest\.status === "valid"[\s\S]*adoptSavedPlan\(latest\)/);
+  assert.ok(
+    page.indexOf('latest.status === "valid"')
+      < page.indexOf("window.localStorage.setItem(STORAGE_KEY, serialized)", page.indexOf("const applyRuntimeSeed")),
+    "a valid plan saved by another tab must win before a runtime seed writes",
+  );
+  assert.match(page, /localStorage\.setItem\(STORAGE_KEY, serialized\)[\s\S]*localStorage\.removeItem\(LEGACY_STORAGE_KEY\)/);
+  assert.match(page, /Later edits stay in this browser/);
+  assert.ok(
+    page.indexOf("shouldApplyRuntimeSeed(snapshot.status, runtimeSeed)")
+      < page.indexOf('snapshot.status === "invalid" || snapshot.status === "unavailable"'),
+    "a valid runtime seed must replace damaged storage before the old-save warning is shown",
+  );
+  assert.match(runtimeSeed, /validateWayfinderInput\(JSON\.parse\(value\)\)/);
+  assert.match(runtimeSeed, /syncDocumentFields\(result\.document\)/);
+  assert.match(runtimeSeed, /browserStatus === "empty" \|\| browserStatus === "invalid"/);
+  assert.match(viteConfig, /WAYFINDER_RUNTIME_SEED_ENABLED === "1"/);
+  assert.match(viteConfig, /WAYFINDER_RUNTIME_SEED_ID/);
+  assert.match(viteConfig, /wayfinder-runtime-seed-\$\{RUNTIME_SEED_ID\}\.json/);
+  assert.match(viteConfig, /command === "serve" && mode === "development"/);
+  assert.match(viteConfig, /fstatSync\(handle\)[\s\S]*details\.isFile\(\)[\s\S]*MAX_RUNTIME_SEED_BYTES/);
+  assert.match(launcher, /prepare_runtime_seed\(document_path\)/);
+  assert.match(launcher, /secrets\.token_urlsafe/);
+  assert.match(launcher, /os\.replace\(candidate_path, target_path\)/);
+  assert.match(launcher, /JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE/);
+  assert.match(launcher, /LEASE_IDENTITY_KEY = "ownerIdentity"/);
+  assert.ok(
+    launcher.indexOf("establish_windows_job_containment()")
+      < launcher.indexOf("prepare_runtime_seed(document_path)"),
+    "Windows child containment must be established before a seed artifact is created",
+  );
+  assert.doesNotMatch(launcher, /update_seed_lease_owner/);
+  assert.match(launcher, /RUNTIME_SEED_ENABLED_ENV_VAR/);
+  assert.match(launcher, /sends its starter document to every browser that can reach it/);
+  assert.match(launcher, /finally:[\s\S]*cleanup_runtime_seed\(runtime_seed_id\)/);
+  assert.match(launcher, /os\.fstat\(source\.fileno\(\)\)[\s\S]*stat\.S_ISREG/);
+  assert.doesNotMatch(launcher, /print\(.*document_path|display_document_path/);
 
   // Import and manual setup meet at the same document model; imports are parsed,
   // validated, previewed, and explicitly confirmed before replacing the dashboard.
@@ -87,9 +134,9 @@ test("keeps the v4 model, import contract, calculations, and sharing flows publi
   assert.match(page, /file\.size > MAX_DOCUMENT_BYTES[\s\S]*await file\.text\(\)/);
   assert.match(page, /const result = validateWayfinderInput\(JSON\.parse\(await file\.text\(\)\)\)/);
   assert.match(page, /document: syncDocumentFields\(result\.document\)/);
-  assert.match(page, /Validated import preview/);
-  assert.match(page, /Import is atomic: nothing changes until you confirm/);
-  assert.match(page, /Replace with validated document/);
+  assert.match(page, /Replace this browser’s complete comparison\?/);
+  assert.match(page, /Nothing changes until you confirm; it replaces everything, with no partial merge/);
+  assert.match(page, /Replace complete comparison/);
   assert.match(page, /const confirmImport = async \(\) => \{[\s\S]*await commitPlan\([\s\S]*confirmedImport\.document,[\s\S]*Validated document replaced this browser dashboard/);
   assert.ok(
     page.indexOf("setImportCandidate({") < page.indexOf("const confirmImport"),
@@ -181,9 +228,9 @@ test("keeps the v4 model, import contract, calculations, and sharing flows publi
 
   // Users and agents can exchange an empty v4 template, a full editable document,
   // and a read-only family view; sources remain structured evidence, not fake scores.
-  assert.match(page, /wayfinder-agent-template\.v4\.json/);
-  assert.match(page, /Download agent template/);
-  assert.match(page, /Download editable document/);
+  assert.match(page, /wayfinder-comparison-template\.v4\.json/);
+  assert.match(page, /Download blank comparison template/);
+  assert.match(page, /Download editable comparison file/);
   assert.match(page, /Download family view/);
   assert.match(page, /createFamilyShareHtml\(plan\)/);
   assert.match(page, /Source-backed research records/);

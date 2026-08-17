@@ -876,14 +876,14 @@ function migrateLegacy(value: unknown): DocumentResult {
     {
       id: "legacy-option-commitments",
       label: "Legacy option commitments",
-      description: "Preserved from an older option; review in the Comparison model.",
+      description: "Preserved from an older option; review in Shared settings.",
       group: "commitment",
       scope: "perOption",
     },
     {
       id: "legacy-option-investment",
       label: "Legacy option investment target",
-      description: "Preserved from an older option; review in the Comparison model.",
+      description: "Preserved from an older option; review in Shared settings.",
       group: "plannedInvestment",
       scope: "perOption",
     },

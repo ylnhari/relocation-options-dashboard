@@ -13,6 +13,7 @@ const eslintConfig = defineConfig([
     "dist/**",
     "out/**",
     "build/**",
+    "private-data/**",
     "next-env.d.ts",
     "app/wayfinder-schema-validator.generated.mjs",
   ]),

@@ -42,6 +42,7 @@ yarn-error.log*
 /.wrangler/
 /outputs/
 /work/
+# Private per-launch runtime starter artifacts
 /.local/
 
 # Private or machine-local scenario exports and overlays

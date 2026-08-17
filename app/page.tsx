@@ -12,7 +12,6 @@ import {
 import {
   DEFAULT_DOCUMENT,
   LEGACY_STORAGE_KEY,
-  SCHEMA_VERSION,
   STORAGE_KEY,
   createBlankScenario,
   createCurrentScenario,
@@ -45,9 +44,10 @@ import {
   type DerivedScenario,
 } from "./scenario-math";
 import { createFamilyShareHtml } from "./share-report";
+import { parseRuntimeSeed, shouldApplyRuntimeSeed } from "./runtime-seed";
 
 type DisplayMode = "base" | "local";
-type StorageNotice = { tone: "warning" | "error"; message: string };
+type StorageNotice = { tone: "warning" | "seed" | "error"; message: string };
 type StoredPlanSnapshot =
   | {
       status: "valid";
@@ -75,6 +75,7 @@ const STORAGE_LOCK_NAME = "wayfinder-browser-storage-v4";
 const STORAGE_LOCK_DB_NAME = "wayfinder-coordination";
 const STORAGE_LOCK_DB_VERSION = 1;
 const STORAGE_LOCK_STORE = "browser-storage-locks";
+const RECOVERY_STORAGE_KEY = "wayfinder.recovery.invalid-browser-draft.v1";
 
 const groupMeta: Record<
   FieldGroup,
@@ -266,6 +267,52 @@ function withRevisionAfter(document: WayfinderDocument, previous: string | null)
     return { ...stamped, updatedAt: new Date(previousTime + 1).toISOString() };
   }
   return stamped;
+}
+
+function saveInvalidBrowserRecovery() {
+  try {
+    const currentRaw = window.localStorage.getItem(STORAGE_KEY);
+    const legacyRaw = window.localStorage.getItem(LEGACY_STORAGE_KEY);
+    if (new Blob([currentRaw ?? "", legacyRaw ?? ""]).size > MAX_DOCUMENT_BYTES) {
+      return {
+        ok: false as const,
+        message: "The unreadable browser draft is too large to save a recovery copy. The starter document was not applied.",
+      };
+    }
+    const serialized = JSON.stringify({
+      kind: "wayfinder-invalid-browser-recovery",
+      version: 1,
+      capturedAt: new Date().toISOString(),
+      current: currentRaw,
+      legacy: legacyRaw,
+    });
+    if (new Blob([serialized]).size > MAX_DOCUMENT_BYTES) {
+      return {
+        ok: false as const,
+        message: "The unreadable browser draft is too large to save a recovery copy. The starter document was not applied.",
+      };
+    }
+    window.localStorage.setItem(RECOVERY_STORAGE_KEY, serialized);
+    return { ok: true as const };
+  } catch {
+    return {
+      ok: false as const,
+      message: "A recovery copy of the unreadable browser draft could not be saved. The starter document was not applied.",
+    };
+  }
+}
+
+function inspectRecoveryCopy() {
+  try {
+    const serialized = window.localStorage.getItem(RECOVERY_STORAGE_KEY);
+    if (!serialized) return { status: "missing" as const };
+    if (new Blob([serialized]).size > MAX_DOCUMENT_BYTES) {
+      return { status: "invalid" as const };
+    }
+    return { status: "available" as const };
+  } catch {
+    return { status: "unavailable" as const };
+  }
 }
 
 function openStorageLockDatabase() {
@@ -640,6 +687,7 @@ export default function Home() {
   const [importIssues, setImportIssues] = useState<ValidationIssue[]>([]);
   const [storageReady, setStorageReady] = useState(false);
   const [storageNotice, setStorageNotice] = useState<StorageNotice | null>(null);
+  const [recoveryAvailable, setRecoveryAvailable] = useState(false);
   const [storageConflict, setStorageConflict] = useState<StorageConflict | null>(null);
   const [formNotice, setFormNotice] = useState("");
   const [toast, setToast] = useState("");
@@ -647,6 +695,7 @@ export default function Home() {
   const storageTokenRef = useRef<string>("empty");
   const dialogCycleRef = useRef(false);
   const dialogOpenerRef = useRef<HTMLElement | null>(null);
+  const runtimeSeed = useMemo(() => parseRuntimeSeed(), []);
 
   const notify = (message: string) => {
     setToast(message);
@@ -667,28 +716,6 @@ export default function Home() {
     );
     window.requestAnimationFrame(() => firstInvalid.focus());
   };
-
-  useEffect(() => {
-    const snapshot = inspectBrowserStorage();
-    storageTokenRef.current = snapshot.token;
-
-    const frame = window.requestAnimationFrame(() => {
-      if (snapshot.status === "valid") {
-        setPlan(snapshot.document);
-        setActiveIds(snapshot.document.scenarios.map((scenario) => scenario.id));
-        if (snapshot.recoveryMessage) {
-          setStorageNotice({ tone: "warning", message: snapshot.recoveryMessage });
-        }
-        if (snapshot.migrated) {
-          setToast("Older browser data was preserved and migrated. Review the migration notes.");
-        }
-      } else if (snapshot.status === "invalid" || snapshot.status === "unavailable") {
-        setStorageNotice({ tone: "error", message: snapshot.message });
-      }
-      setStorageReady(true);
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, []);
 
   useEffect(() => {
     if (!storageReady) return;
@@ -936,6 +963,148 @@ export default function Home() {
     }
   };
 
+  const adoptSavedPlan = (
+    snapshot: Extract<StoredPlanSnapshot, { status: "valid" }>,
+  ) => {
+    storageTokenRef.current = snapshot.token;
+    setPlan(snapshot.document);
+    setActiveIds(snapshot.document.scenarios.map((scenario) => scenario.id));
+    if (snapshot.recoveryMessage) {
+      setStorageNotice({ tone: "warning", message: snapshot.recoveryMessage });
+    }
+    if (snapshot.migrated) {
+      setToast("Older browser data was preserved and migrated. Review the migration notes.");
+    }
+  };
+
+  const applyRuntimeSeed = async (candidate: WayfinderDocument) => {
+    try {
+      return await withStorageMutationLock(() => {
+        // Another tab may have saved while this tab was waiting for the lock.
+        // A newly valid browser plan always wins over the runtime starter.
+        const latest = inspectBrowserStorage();
+        if (latest.status === "unavailable") {
+          setStorageNotice({ tone: "error", message: latest.message });
+          return "failed" as const;
+        }
+        if (latest.status === "valid") {
+          adoptSavedPlan(latest);
+          return "existing" as const;
+        }
+
+        const synced = syncDocumentFields(
+          withRevisionAfter(candidate, candidate.updatedAt),
+        );
+        const result = validateWayfinderInput(synced);
+        if (!result.ok) {
+          setStorageNotice({
+            tone: "error",
+            message: "The running instance supplied an invalid starter document. Browser data was not changed.",
+          });
+          return "failed" as const;
+        }
+
+        let serialized = "";
+        let recoverySaved = false;
+        try {
+          serialized = JSON.stringify(result.document);
+          if (new Blob([serialized]).size > MAX_DOCUMENT_BYTES) {
+            setStorageNotice({
+              tone: "error",
+              message: "The running instance supplied a starter document larger than the 2 MiB browser limit. Browser data was not changed.",
+            });
+            return "failed" as const;
+          }
+          if (latest.status === "invalid") {
+            const recovery = saveInvalidBrowserRecovery();
+            if (!recovery.ok) {
+              setStorageNotice({ tone: "error", message: recovery.message });
+              return "failed" as const;
+            }
+            recoverySaved = true;
+            setRecoveryAvailable(true);
+          }
+          window.localStorage.setItem(STORAGE_KEY, serialized);
+          // The valid current write is already authoritative. Remove any
+          // damaged legacy value only after that write succeeds.
+          try {
+            window.localStorage.removeItem(LEGACY_STORAGE_KEY);
+          } catch {
+            // A leftover legacy value is harmless because current storage wins.
+          }
+        } catch {
+          setStorageNotice({
+            tone: "error",
+            message: "Browser storage rejected the starter document. Browser data was not changed.",
+          });
+          return "failed" as const;
+        }
+
+        storageTokenRef.current = `current:${result.document.updatedAt}:${fingerprint(serialized)}`;
+        setPlan(result.document);
+        setActiveIds(result.document.scenarios.map((scenario) => scenario.id));
+        return recoverySaved ? "seeded-with-recovery" as const : "seeded" as const;
+      });
+    } catch {
+      setStorageNotice({
+        tone: "error",
+        message: "The browser could not safely save the starter document. Browser data was not changed.",
+      });
+      return "failed" as const;
+    }
+  };
+
+  useEffect(() => {
+    const snapshot = inspectBrowserStorage();
+    const recovery = inspectRecoveryCopy();
+    storageTokenRef.current = snapshot.token;
+
+    const frame = window.requestAnimationFrame(() => {
+      setRecoveryAvailable(recovery.status === "available");
+      if (snapshot.status === "valid") {
+        adoptSavedPlan(snapshot);
+        if (recovery.status === "available") {
+          setStorageNotice({
+            tone: "warning",
+            message: "A raw copy of an earlier unreadable browser draft is available. It may contain sensitive figures and cannot be imported as a complete comparison.",
+          });
+        } else if (recovery.status === "invalid" || recovery.status === "unavailable") {
+          setStorageNotice({
+            tone: "error",
+            message: "The local recovery copy could not be read safely. The saved dashboard was not changed.",
+          });
+        }
+        setStorageReady(true);
+        return;
+      }
+      if (runtimeSeed.status === "valid" && shouldApplyRuntimeSeed(snapshot.status, runtimeSeed)) {
+        void applyRuntimeSeed(runtimeSeed.document).then((outcome) => {
+          if (outcome === "seeded" || outcome === "seeded-with-recovery") {
+            setStorageNotice({
+              tone: "seed",
+              message: outcome === "seeded-with-recovery"
+                ? "The starter document replaced an unreadable browser draft after saving a raw copy. That copy may contain sensitive figures and cannot be imported as a complete comparison."
+                : "This running instance supplied the starter document. Later edits stay in this browser.",
+            });
+            notify("Starter comparison saved in this browser");
+          }
+          setStorageReady(true);
+        });
+        return;
+      }
+      if (snapshot.status === "invalid" || snapshot.status === "unavailable") {
+        setStorageNotice({ tone: "error", message: snapshot.message });
+      } else if (runtimeSeed.status === "invalid") {
+        setStorageNotice({ tone: "error", message: "The running instance supplied an invalid starter document. Browser data was not changed." });
+      }
+      setStorageReady(true);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  // The seed is injected per running instance. This bootstrap must run once;
+  // later edits use the normal guarded save path.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const openManualSetup = () => setModelDraft(cloneDocument(plan));
 
   const toggleActive = (id: string) => {
@@ -1024,13 +1193,16 @@ export default function Home() {
 
         let currentRaw: string | null = null;
         let legacyRaw: string | null = null;
+        let recoveryRaw: string | null = null;
         let mutationStarted = false;
         try {
           currentRaw = window.localStorage.getItem(STORAGE_KEY);
           legacyRaw = window.localStorage.getItem(LEGACY_STORAGE_KEY);
-          // Remove the fallback first so another tab never briefly restores stale
-          // legacy data after the current key disappears.
+          recoveryRaw = window.localStorage.getItem(RECOVERY_STORAGE_KEY);
+          // Remove recovery and fallback data first so another tab never briefly
+          // restores stale legacy data after the current key disappears.
           mutationStarted = true;
+          window.localStorage.removeItem(RECOVERY_STORAGE_KEY);
           window.localStorage.removeItem(LEGACY_STORAGE_KEY);
           window.localStorage.removeItem(STORAGE_KEY);
         } catch {
@@ -1040,6 +1212,8 @@ export default function Home() {
               else window.localStorage.setItem(LEGACY_STORAGE_KEY, legacyRaw);
               if (currentRaw === null) window.localStorage.removeItem(STORAGE_KEY);
               else window.localStorage.setItem(STORAGE_KEY, currentRaw);
+              if (recoveryRaw === null) window.localStorage.removeItem(RECOVERY_STORAGE_KEY);
+              else window.localStorage.setItem(RECOVERY_STORAGE_KEY, recoveryRaw);
             } catch {
               // The UI remains unchanged; the notice asks the user to reload and verify.
             }
@@ -1057,6 +1231,7 @@ export default function Home() {
         setPlan(blank);
         setActiveIds([]);
         setStorageNotice(null);
+        setRecoveryAvailable(false);
         setClearConfirm(false);
         setShareOpen(false);
         notify("All Wayfinder data was cleared from this browser");
@@ -1067,6 +1242,31 @@ export default function Home() {
         message: "The browser could not acquire the exclusive clear lock. Your dashboard is unchanged.",
       });
       notify("Could not clear browser storage. Your dashboard is unchanged.");
+    }
+  };
+
+  const downloadRecoveryCopy = () => {
+    try {
+      const recovery = window.localStorage.getItem(RECOVERY_STORAGE_KEY);
+      if (!recovery || new Blob([recovery]).size > MAX_DOCUMENT_BYTES) {
+        setRecoveryAvailable(false);
+        setStorageNotice({
+          tone: "error",
+          message: "The local recovery copy is missing or too large to download.",
+        });
+        return;
+      }
+      downloadText(
+        `wayfinder-unreadable-browser-data-${new Date().toISOString().slice(0, 10)}.json`,
+        recovery,
+        "application/json",
+      );
+      notify("Unreadable-data copy downloaded");
+    } catch {
+      setStorageNotice({
+        tone: "error",
+        message: "The local recovery copy could not be read. Browser data was not changed.",
+      });
     }
   };
 
@@ -1085,7 +1285,7 @@ export default function Home() {
     const template = createWayfinderDocument(plan.baseCurrency);
     template.title = "Replace with a clear comparison title";
     downloadText(
-      "wayfinder-agent-template.v4.json",
+      "wayfinder-comparison-template.v4.json",
       JSON.stringify(template, null, 2),
       "application/json",
     );
@@ -1216,7 +1416,7 @@ export default function Home() {
     event.preventDefault();
     if (!modelDraft) return;
     const savedModel = syncDocumentFields(modelDraft);
-    if (!await commitPlan(savedModel, "Comparison model applied to every option")) return;
+    if (!await commitPlan(savedModel, "Shared settings applied to every option")) return;
     setModelDraft(null);
     setDeleteFieldConfirm(null);
     if (!plan.scenarios.length) {
@@ -1308,7 +1508,7 @@ export default function Home() {
               <button type="button" aria-pressed={mode === "local"} className={mode === "local" ? "active" : ""} onClick={() => setMode("local")}>Local view</button>
             </div>
           )}
-          <button className="button ghost" onClick={() => setModelDraft(cloneDocument(plan))}>Comparison model</button>
+          <button className="button ghost" onClick={() => setModelDraft(cloneDocument(plan))}>Shared settings</button>
           {plan.scenarios.length > 0 && <button className="button ghost share-button" onClick={() => setShareOpen(true)}>Share</button>}
           <button
             className="button primary"
@@ -1318,18 +1518,23 @@ export default function Home() {
                 : openManualSetup()
             }
           >
-            <span aria-hidden="true">＋</span> {plan.scenarios.length ? "Add option" : "Start setup"}
+            <span aria-hidden="true">＋</span> {plan.scenarios.length ? "Add option" : "Enter my details"}
           </button>
         </div>
       </header>
 
-      {storageNotice && (
+      {(storageNotice || recoveryAvailable) && (
         <div
-          className={`storage-notice ${storageNotice.tone}`}
-          role={storageNotice.tone === "error" ? "alert" : "status"}
+          className={`storage-notice ${storageNotice?.tone ?? "warning"}`}
+          role={storageNotice?.tone === "error" ? "alert" : "status"}
         >
-          <strong>{storageNotice.tone === "error" ? "Browser save needs attention" : "Browser data recovered"}</strong>
-          <span>{storageNotice.message}</span>
+          <strong>{storageNotice?.tone === "error" ? "Browser save needs attention" : storageNotice?.tone === "seed" ? "Starter document loaded" : recoveryAvailable ? "Unreadable browser data saved" : "Browser data recovered"}</strong>
+          <span>{storageNotice?.message ?? "A raw copy of an earlier unreadable browser draft is available. It may contain sensitive figures and cannot be imported as a complete comparison."}</span>
+          {recoveryAvailable && (
+            <button type="button" className="storage-notice-action" onClick={downloadRecoveryCopy}>
+              Download unreadable-data copy
+            </button>
+          )}
         </div>
       )}
 
@@ -1337,19 +1542,19 @@ export default function Home() {
         <section className="welcome" id="top">
           <div className="welcome-copy">
             <div className="eyebrow"><span className="pulse-dot" /> Open source · private on your device</div>
-            <h1>Build one model. Compare <em>every move.</em></h1>
-            <p>Define the fields shared by every option once, then add local salary, tax, living costs, evidence, and exchange rates manually or with an agent-authored document.</p>
+            <h1>Enter your numbers. Compare <em>every move.</em></h1>
+            <p>Enter details manually or import one JSON file containing shared settings, your current situation, all alternatives, assumptions, and sources.</p>
             <div className="welcome-actions">
-              <button className="button primary large" onClick={openManualSetup}>Set up manually</button>
-              <button className="button ghost large" onClick={() => fileInputRef.current?.click()}>Import agent document</button>
-              <button className="button ghost large" onClick={downloadAgentTemplate}>Download agent template</button>
+              <button className="button primary large" onClick={openManualSetup}>Enter my details</button>
+              <button className="button ghost large" onClick={() => fileInputRef.current?.click()}>Import complete comparison</button>
+              <button className="button ghost large" onClick={downloadAgentTemplate}>Download blank comparison template</button>
             </div>
             <p className="privacy-note">No sign-in, cloud database, or telemetry. Your figures stay in this browser unless you deliberately download a file.</p>
           </div>
           <div className="welcome-steps" aria-label="How Wayfinder works">
-            <article><b>01</b><div><strong>Comparison model</strong><span>Choose a base currency and common fields once.</span></div></article>
-            <article><b>02</b><div><strong>Manual or agent input</strong><span>Fill every option with the same validated document contract.</span></div></article>
-            <article><b>03</b><div><strong>Audit the result</strong><span>Expand every total into its fields, sources, and assumptions.</span></div></article>
+            <article><b>01</b><div><strong>Shared settings</strong><span>Choose comparison currency, growth assumptions, and common costs/investments once.</span></div></article>
+            <article><b>02</b><div><strong>Add your options</strong><span>Enter the current situation and each country, city, or job offer.</span></div></article>
+            <article><b>03</b><div><strong>Review the comparison</strong><span>See salary, deductions, costs, investments, cash left, assumptions, and sources.</span></div></article>
           </div>
         </section>
       ) : (
@@ -1367,9 +1572,9 @@ export default function Home() {
             </div>
             <button className="model-summary-card" onClick={() => setModelDraft(cloneDocument(plan))}>
               <span>Controlled from one place</span>
-              <strong>Comparison model</strong>
+              <strong>Shared settings</strong>
               <small>Edit fields, shared values, excluded support, projection assumptions, and sources.</small>
-              <b>Open model →</b>
+              <b>Open settings →</b>
             </button>
           </section>
 
@@ -1623,7 +1828,7 @@ export default function Home() {
                     })}
                   </div>
                 ) : (
-                  <div className="panel empty-research"><p>No research records yet. Add them in the Comparison model or import an agent-authored document.</p><button className="button ghost" onClick={() => setModelDraft(cloneDocument(plan))}>Add research records</button></div>
+                  <div className="panel empty-research"><p>No research records yet. Add them in Shared settings or import a complete comparison file.</p><button className="button ghost" onClick={() => setModelDraft(cloneDocument(plan))}>Add research records</button></div>
                 )}
               </section>
 
@@ -1662,7 +1867,7 @@ export default function Home() {
 
               <section className="section-block evidence-section">
                 <div className="evidence-card">
-                  <div><span className="section-kicker">Rules used everywhere</span><h2>Shared model, no hidden arithmetic</h2></div>
+                  <div><span className="section-kicker">Rules used everywhere</span><h2>Same rules, no hidden arithmetic</h2></div>
                   <div className="evidence-rules">
                     <p><strong>External help received:</strong> may be recorded for context, never counted as income or expense.</p>
                     <p><strong>Commitments:</strong> shared values are entered once in {plan.baseCurrency} and applied equally.</p>
@@ -1679,24 +1884,24 @@ export default function Home() {
       <footer className="footer">
         <div><strong>Wayfinder</strong><span>Open-source, local-first relocation comparison</span></div>
         <div className="footer-actions">
-          <button onClick={() => setModelDraft(cloneDocument(plan))}>Comparison model</button>
+          <button onClick={() => setModelDraft(cloneDocument(plan))}>Shared settings</button>
           {plan.scenarios.length > 0 && <button onClick={() => setShareOpen(true)}>Share / backup</button>}
-          <button onClick={() => fileInputRef.current?.click()}>Import document</button>
-          {(plan.scenarios.length > 0 || plan.excludedSupport.length > 0) && <button onClick={() => setClearConfirm(true)}>Clear this browser</button>}
+          <button onClick={() => fileInputRef.current?.click()}>Import complete comparison</button>
+          {(plan.scenarios.length > 0 || plan.excludedSupport.length > 0 || recoveryAvailable) && <button onClick={() => setClearConfirm(true)}>Clear this browser</button>}
         </div>
-        <input ref={fileInputRef} className="sr-only" type="file" accept="application/json,.json" onChange={importDocument} />
+        <input ref={fileInputRef} className="sr-only" type="file" accept="application/json,.json" aria-label="Select complete comparison JSON file" onChange={importDocument} />
       </footer>
 
       {shareOpen && plan.scenarios.length > 0 && (
         <div className="modal-backdrop">
           <button className="modal-dismiss" type="button" tabIndex={-1} aria-label="Close sharing options" onClick={() => setShareOpen(false)} />
           <section className="share-modal" role="dialog" aria-modal="true" aria-labelledby="share-title" data-dialog-id="share" tabIndex={-1}>
-            <div className="modal-head"><div><span className="section-kicker">Share, back up, or hand off to an agent</span><h2 id="share-title">Choose the right document</h2></div><button type="button" className="close-button" onClick={() => setShareOpen(false)} aria-label="Close sharing options">×</button></div>
+            <div className="modal-head"><div><span className="section-kicker">Share or back up</span><h2 id="share-title">Choose what to download</h2></div><button type="button" className="close-button" onClick={() => setShareOpen(false)} aria-label="Close sharing options">×</button></div>
             <p className="modal-intro">Financial exports are sensitive. GitHub contains only the empty application and fictional examples—never your browser data.</p>
             <div className="share-choices three-up">
               <article><span className="share-icon" aria-hidden="true">↗</span><div><h3>Family view</h3><p>A read-only HTML report with full calculations and assumptions. It works offline in a modern browser.</p></div><button className="button primary" onClick={downloadFamilyView}>Download family view</button></article>
-              <article><span className="share-icon" aria-hidden="true">⇄</span><div><h3>Editable document</h3><p>The complete validated JSON source of truth. Back it up or let an agent update it.</p></div><button className="button ghost" onClick={exportDocument}>Download editable document</button></article>
-              <article><span className="share-icon" aria-hidden="true">◎</span><div><h3>Agent template</h3><p>An empty v{SCHEMA_VERSION} document with every standard field. Agents can fill it, validate it, and you can preview before import.</p></div><button className="button ghost" onClick={downloadAgentTemplate}>Download agent template</button></article>
+              <article><span className="share-icon" aria-hidden="true">⇄</span><div><h3>Editable comparison file</h3><p>The complete comparison file: shared settings, every option, assumptions, evidence, and sources.</p></div><button className="button ghost" onClick={exportDocument}>Download editable comparison file</button></article>
+              <article><span className="share-icon" aria-hidden="true">◎</span><div><h3>Blank comparison template</h3><p>An empty JSON comparison template with every standard field, ready to fill in and preview before import.</p></div><button className="button ghost" onClick={downloadAgentTemplate}>Download blank comparison template</button></article>
             </div>
             <div className="share-network-note"><strong>Import safety</strong><p>Wayfinder validates the entire file and shows a preview before replacement. No import silently overwrites the current dashboard.</p></div>
           </section>
@@ -1705,18 +1910,18 @@ export default function Home() {
 
       {modelDraft && (
         <div className="modal-backdrop">
-          <button className="modal-dismiss" type="button" tabIndex={-1} aria-label="Close comparison model" onClick={() => setModelDraft(null)} />
+          <button className="modal-dismiss" type="button" tabIndex={-1} aria-label="Close shared settings" onClick={() => setModelDraft(null)} />
           <form className="scenario-modal model-modal" role="dialog" aria-modal="true" aria-labelledby="model-title" data-dialog-id="comparison-model" tabIndex={-1} onSubmit={saveModel} onInvalidCapture={revealFirstInvalidControl} onChangeCapture={() => setFormNotice("")}>
-            <div className="modal-head"><div><span className="section-kicker">Single source of truth</span><h2 id="model-title">Comparison model</h2></div><button type="button" className="close-button" onClick={() => setModelDraft(null)} aria-label="Close comparison model">×</button></div>
-            <p className="modal-intro">Define fields once. Per-option fields appear automatically in every option; shared fields use one {modelDraft.baseCurrency} amount across all options.</p>
+            <div className="modal-head"><div><span className="section-kicker">Used by every option</span><h2 id="model-title">Shared settings</h2></div><button type="button" className="close-button" onClick={() => setModelDraft(null)} aria-label="Close shared settings">×</button></div>
+            <p className="modal-intro">Enter these settings once. Fields marked for each option are filled separately for every option, while shared amounts are entered once in the comparison currency.</p>
             {formNotice && <p className="form-error-summary" role="alert">{formNotice}</p>}
 
             <fieldset className="editor-section">
-              <legend>Document and projection settings</legend>
+              <legend>Comparison and forecast settings</legend>
               <div className="form-grid">
                 <label className="wide"><span>Comparison title</span><input required value={modelDraft.title} onChange={(event) => setModelDraft({ ...modelDraft, title: event.target.value })} /></label>
                 <label><span>Base currency<small>Three-letter code used for comparisons</small></span><input required maxLength={3} disabled={modelDraft.scenarios.length > 0} value={modelDraft.baseCurrency} onChange={(event) => setModelDraft({ ...modelDraft, baseCurrency: currencyCode(event.target.value) })} /></label>
-                <label><span>Number locale<small>For example en-US or en-GB</small></span><input required value={modelDraft.locale} onChange={(event) => setModelDraft({ ...modelDraft, locale: event.target.value })} /></label>
+                <label><span>Number format<small>For example en-US or en-GB</small></span><input required value={modelDraft.locale} onChange={(event) => setModelDraft({ ...modelDraft, locale: event.target.value })} /></label>
                 <label><span>Annual income growth %</span><input required min="-25" max="100" step="0.1" type="number" value={modelDraft.projectionAssumptions.incomeGrowthPct} onChange={(event) => setModelDraft({ ...modelDraft, projectionAssumptions: { ...modelDraft.projectionAssumptions, incomeGrowthPct: Number(event.target.value) } })} /></label>
                 <label><span>Annual expense inflation %</span><input required min="-25" max="100" step="0.1" type="number" value={modelDraft.projectionAssumptions.expenseInflationPct} onChange={(event) => setModelDraft({ ...modelDraft, projectionAssumptions: { ...modelDraft.projectionAssumptions, expenseInflationPct: Number(event.target.value) } })} /></label>
                 <label><span>Projection years</span><input required min="1" max="20" step="1" type="number" value={modelDraft.projectionAssumptions.years} onChange={(event) => setModelDraft({ ...modelDraft, projectionAssumptions: { ...modelDraft.projectionAssumptions, years: Number(event.target.value) } })} /></label>
@@ -1750,7 +1955,7 @@ export default function Home() {
                     ))}
                   </div>
                   <div className="add-field-actions">
-                    <button type="button" className="button ghost" onClick={() => addModelField(group, "perOption")}>＋ Add per-option field</button>
+                    <button type="button" className="button ghost" onClick={() => addModelField(group, "perOption")}>＋ Add field for each option</button>
                     {allowShared && <button type="button" className="button ghost" onClick={() => addModelField(group, "shared")}>＋ Add shared field</button>}
                   </div>
                 </fieldset>
@@ -1805,7 +2010,7 @@ export default function Home() {
               <section className="migration-notes"><strong>Migration review needed</strong>{modelDraft.migrationNotes.map((note) => <p key={note}>{note}</p>)}</section>
             )}
 
-            <div className="modal-actions"><span /><button type="button" className="button ghost" onClick={() => setModelDraft(null)}>Cancel</button><button type="submit" className="button primary">{modelDraft.scenarios.length ? "Apply model to all options" : "Save model and enter current situation"}</button></div>
+            <div className="modal-actions"><span /><button type="button" className="button ghost" onClick={() => setModelDraft(null)}>Cancel</button><button type="submit" className="button primary">{modelDraft.scenarios.length ? "Apply shared settings" : "Save settings and enter current situation"}</button></div>
           </form>
         </div>
       )}
@@ -1815,7 +2020,7 @@ export default function Home() {
           <button className="modal-dismiss" type="button" tabIndex={-1} aria-label="Close option editor" onClick={() => setEditor(null)} />
           <form className="scenario-modal" role="dialog" aria-modal="true" aria-labelledby="scenario-editor-title" data-dialog-id="scenario-editor" tabIndex={-1} onSubmit={saveScenario} onInvalidCapture={revealFirstInvalidControl} onChangeCapture={() => setFormNotice("")}>
             <div className="modal-head"><div><span className="section-kicker">{firstScenarioSetup ? "Current situation" : "Option editor"}</span><h2 id="scenario-editor-title">{firstScenarioSetup ? "Enter your current option" : editingExisting ? "Edit this option" : "Add a new option"}</h2></div><button type="button" className="close-button" onClick={() => setEditor(null)} aria-label="Close editor">×</button></div>
-            <p className="modal-intro">Amounts below use {editor.currency}. Every category is controlled from the Comparison model so no option silently misses a field.</p>
+            <p className="modal-intro">Amounts below use {editor.currency}. Shared settings keep every option on the same set of fields.</p>
             {formNotice && <p className="form-error-summary" role="alert">{formNotice}</p>}
 
             <fieldset className="editor-section">
@@ -1849,7 +2054,7 @@ export default function Home() {
                   </div>
                   {plan.fieldDefinitions.some((field) => field.group === group && field.scope === "shared") && (
                     <div className="shared-preview-list">
-                      <strong>Applied automatically from the Comparison model</strong>
+                      <strong>Applied automatically from Shared settings</strong>
                       {plan.fieldDefinitions.filter((field) => field.group === group && field.scope === "shared").map((field) => <span key={field.id}>{field.label}<b>{formatMoney(plan.sharedValues[field.id] ?? 0, plan.baseCurrency, plan.locale)}</b></span>)}
                     </div>
                   )}
@@ -1904,11 +2109,11 @@ export default function Home() {
         <div className="modal-backdrop">
           <button className="modal-dismiss" type="button" tabIndex={-1} aria-label="Close import preview" onClick={() => setImportCandidate(null)} />
           <section className="share-modal import-modal" role="dialog" aria-modal="true" aria-labelledby="import-title" data-dialog-id="import-preview" tabIndex={-1}>
-            <div className="modal-head"><div><span className="section-kicker">Validated import preview</span><h2 id="import-title">Replace this browser dashboard?</h2></div><button className="close-button" onClick={() => setImportCandidate(null)} aria-label="Close import preview">×</button></div>
+            <div className="modal-head"><div><span className="section-kicker">Check before replacing</span><h2 id="import-title">Replace this browser’s complete comparison?</h2></div><button className="close-button" onClick={() => setImportCandidate(null)} aria-label="Close import preview">×</button></div>
             <div className="import-summary"><div><span>Title</span><strong>{importCandidate.document.title}</strong></div><div><span>Base currency</span><strong>{importCandidate.document.baseCurrency}</strong></div><div><span>Options</span><strong>{importCandidate.document.scenarios.length}</strong></div><div><span>Common fields</span><strong>{importCandidate.document.fieldDefinitions.length}</strong></div></div>
             {importCandidate.migrated && <p className="migration-warning">This older Wayfinder file was migrated without changing its stored totals. Review migration notes and sources after import.</p>}
-            <p className="modal-intro">Import is atomic: nothing changes until you confirm. Version 4 deliberately replaces the whole model so shared fields cannot be partially merged or double counted.</p>
-            <div className="modal-actions"><button className="button ghost" onClick={exportDocument}>Download current backup first</button><span /><button className="button ghost" onClick={() => setImportCandidate(null)}>Cancel</button><button className="button primary" onClick={confirmImport}>Replace with validated document</button></div>
+            <p className="modal-intro">This complete comparison file includes and replaces shared settings, your current situation, all options, assumptions, evidence, and sources. Nothing changes until you confirm; it replaces everything, with no partial merge.</p>
+            <div className="modal-actions"><button className="button ghost" onClick={exportDocument}>Download current backup first</button><span /><button className="button ghost" onClick={() => setImportCandidate(null)}>Cancel</button><button className="button primary" onClick={confirmImport}>Replace complete comparison</button></div>
           </section>
         </div>
       )}
@@ -1930,7 +2135,7 @@ export default function Home() {
           <button className="modal-dismiss" type="button" tabIndex={-1} aria-label="Cancel clearing browser data" onClick={() => setClearConfirm(false)} />
           <section className="share-modal confirm-modal" role="dialog" aria-modal="true" aria-labelledby="clear-title" data-dialog-id="clear-browser" tabIndex={-1}>
             <div className="modal-head"><div><span className="section-kicker">Local data deletion</span><h2 id="clear-title">Clear this browser?</h2></div><button className="close-button" onClick={() => setClearConfirm(false)} aria-label="Cancel clearing browser data">×</button></div>
-            <p className="modal-intro">This removes the comparison model, every option, excluded-support notes, and sources from this browser. The public application repository is unaffected.</p>
+            <p className="modal-intro">This removes shared settings, every option, excluded-support notes, sources, and any local recovery copy from this browser. The public application repository is unaffected.</p>
             <div className="modal-actions"><button className="button ghost" onClick={exportDocument}>Download backup first</button><span /><button className="button ghost" onClick={() => setClearConfirm(false)}>Cancel</button><button className="button danger" onClick={clearDashboard}>Clear all local data</button></div>
           </section>
         </div>
