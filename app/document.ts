@@ -5,7 +5,6 @@ import {
   createEmptyValues,
   createSharedEvidence,
   createScenarioEvidence,
-  createStableId,
   createWayfinderDocument,
   type FieldGroup,
   type FieldScope,
@@ -37,10 +36,26 @@ const LEGACY_CONVERSION_SOURCES = new Set([
   "Legacy import — verify this rate",
   "Older import — verify this conversion ratio",
 ]);
+const V4_MIGRATION_NOTES_RETAINED = "Migration notes from a v4 file were retained for review.";
+const LEGACY_MIGRATION_NOTES = new Set([
+  "Legacy option-level commitments and investment targets were preserved for review; shared scope was not recorded.",
+  "Legacy gross-to-net differences and aggregate living amounts were preserved in neutral review fields; original categories were not recorded.",
+  "Legacy non-base conversion rates are unresolved until a real rate, date, and source are supplied.",
+  // Retain the exact notes emitted by earlier supported migrations so stored
+  // recoverable backups do not become unreadable.
+  "Legacy totals were preserved as option-level fields. Review which commitments and investments should become shared.",
+  "Legacy gross-to-net differences were preserved as non-saving deductions because their original categories were not available.",
+  "Older conversion ratios had no date and must be verified before import.",
+  "Legacy FX rates had no as-of date and should be verified.",
+  V4_MIGRATION_NOTES_RETAINED,
+]);
 const LEGACY_CONVERSION_NOTES = new Set([
+  "Legacy non-base conversion rates are unresolved until a real rate, date, and source are supplied.",
   "Legacy FX rates had no as-of date and should be verified.",
   "Older conversion ratios had no date and must be verified before import.",
 ]);
+const V4_SCHEMA_VERSION = 4;
+const COUNTRY_CODE_PATTERN = /^[A-Z]{2}$/;
 
 function carriesLegacyConversionMarker(root: Record<string, unknown>, source: unknown) {
   return typeof source === "string" &&
@@ -72,9 +87,16 @@ const ROOT_KEYS = new Set([
   "researchItems",
   "projectionAssumptions",
   "scenarios",
+  "currentScenarioId",
   "migrationNotes",
+  "legacyMigrationNotes",
   "updatedAt",
 ]);
+const V4_ROOT_KEYS = new Set(
+  [...ROOT_KEYS].filter((key) => (
+    key !== "currentScenarioId" && key !== "legacyMigrationNotes"
+  )),
+);
 
 const FIELD_KEYS = new Set([
   "id",
@@ -159,7 +181,8 @@ const MAX_FIELD_DEFINITIONS = 100;
 const MAX_SCENARIOS = 25;
 const MAX_EXCLUDED_SUPPORT = 100;
 const MAX_RESEARCH_ITEMS = 100;
-const MAX_MIGRATION_NOTES = 50;
+const MAX_MIGRATION_NOTES = LEGACY_MIGRATION_NOTES.size;
+const MAX_V4_MIGRATION_NOTES = 50;
 const MAX_LIST_ITEMS = 50;
 const MAX_SCENARIO_REFERENCES = 25;
 const MAX_VALUE_MAP_ENTRIES = 100;
@@ -191,6 +214,12 @@ const LEGACY_SCENARIO_KEYS = new Set([
   "risks",
 ]);
 const LEGACY_REQUIRED_SCENARIO_KEYS = [
+  "id",
+  "flag",
+  "label",
+  "location",
+  "employment",
+  "status",
   "currency",
   "fxToInr",
   "grossMonthly",
@@ -198,6 +227,7 @@ const LEGACY_REQUIRED_SCENARIO_KEYS = [
   "localLiving",
   "indiaCommitments",
   "investmentTarget",
+  "earners",
 ] as const;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -381,23 +411,29 @@ function validateEvidence(
   }
 }
 
-export function validateWayfinderDocument(
+function validateKnownWayfinderDocument(
   value: unknown,
   options: DocumentValidationOptions = {},
+  expectedSchemaVersion: typeof SCHEMA_VERSION | typeof V4_SCHEMA_VERSION,
 ): DocumentResult {
   const issues: ValidationIssue[] = [];
   if (!isRecord(value)) {
     return { ok: false, issues: [{ path: "$", message: "Expected a JSON object." }] };
   }
 
-  unknownKeys(value, ROOT_KEYS, "$", issues);
+  unknownKeys(
+    value,
+    expectedSchemaVersion === V4_SCHEMA_VERSION ? V4_ROOT_KEYS : ROOT_KEYS,
+    "$",
+    issues,
+  );
   if (value.kind !== DOCUMENT_KIND) {
     issues.push({ path: "$.kind", message: `Expected ${DOCUMENT_KIND}.` });
   }
-  if (value.schemaVersion !== SCHEMA_VERSION) {
+  if (value.schemaVersion !== expectedSchemaVersion) {
     issues.push({
       path: "$.schemaVersion",
-      message: `Expected supported schema version ${SCHEMA_VERSION}.`,
+      message: `Expected supported schema version ${expectedSchemaVersion}.`,
     });
   }
   requiredString(value.title, "$.title", issues, { max: 160 });
@@ -667,18 +703,52 @@ export function validateWayfinderDocument(
   if (!Array.isArray(value.migrationNotes)) {
     issues.push({ path: "$.migrationNotes", message: "Expected a list." });
   } else {
-    if (validateMaxItems(value.migrationNotes, "$.migrationNotes", MAX_MIGRATION_NOTES, issues)) {
-      validateStringArray(value.migrationNotes, "$.migrationNotes", issues);
+    const maximumNotes = expectedSchemaVersion === V4_SCHEMA_VERSION
+      ? MAX_V4_MIGRATION_NOTES
+      : MAX_MIGRATION_NOTES;
+    if (validateMaxItems(value.migrationNotes, "$.migrationNotes", maximumNotes, issues)) {
+      const seenMigrationNotes = new Set<string>();
+      value.migrationNotes.forEach((note, index) => {
+        const path = `$.migrationNotes[${index}]`;
+        requiredString(note, path, issues, { max: 1000 });
+        if (expectedSchemaVersion === SCHEMA_VERSION && typeof note === "string") {
+          if (!LEGACY_MIGRATION_NOTES.has(note)) {
+            issues.push({
+              path,
+              message: "Migration notes must be recognized system-generated legacy provenance.",
+            });
+          }
+          if (seenMigrationNotes.has(note)) {
+            issues.push({ path, message: "Migration notes must not be repeated." });
+          }
+          seenMigrationNotes.add(note);
+        }
+      });
     }
   }
 
+  if (expectedSchemaVersion === SCHEMA_VERSION) {
+    if (!Array.isArray(value.legacyMigrationNotes)) {
+      issues.push({ path: "$.legacyMigrationNotes", message: "Expected a list." });
+    } else if (validateMaxItems(
+      value.legacyMigrationNotes,
+      "$.legacyMigrationNotes",
+      MAX_V4_MIGRATION_NOTES,
+      issues,
+    )) {
+      value.legacyMigrationNotes.forEach((note, index) => {
+        requiredString(note, `$.legacyMigrationNotes[${index}]`, issues, { max: 1000 });
+      });
+    }
+  }
+
+  const savedScenarioIds = new Set<string>();
   if (!Array.isArray(value.scenarios)) {
     issues.push({ path: "$.scenarios", message: "Expected a list." });
   } else {
     if (!validateMaxItems(value.scenarios, "$.scenarios", MAX_SCENARIOS, issues)) {
       // Do not traverse an oversized import after reporting the size limit.
     } else {
-    const scenarioIds = new Set<string>();
     value.scenarios.forEach((candidate, index) => {
       const path = `$.scenarios[${index}]`;
       if (!isRecord(candidate)) {
@@ -687,7 +757,16 @@ export function validateWayfinderDocument(
       }
       unknownKeys(candidate, SCENARIO_KEYS, path, issues);
       validateId(candidate.id, `${path}.id`, issues);
-      requiredString(candidate.flag, `${path}.flag`, issues, { max: 3 });
+      requiredString(candidate.flag, `${path}.flag`, issues, {
+        max: expectedSchemaVersion === SCHEMA_VERSION ? 2 : 3,
+      });
+      if (
+        expectedSchemaVersion === SCHEMA_VERSION &&
+        typeof candidate.flag === "string" &&
+        !COUNTRY_CODE_PATTERN.test(candidate.flag)
+      ) {
+        issues.push({ path: `${path}.flag`, message: "Expected a two-letter uppercase country code." });
+      }
       requiredString(candidate.label, `${path}.label`, issues, { max: 160 });
       requiredString(candidate.location, `${path}.location`, issues, { max: 240 });
       requiredString(candidate.employment, `${path}.employment`, issues, { max: 500 });
@@ -844,12 +923,31 @@ export function validateWayfinderDocument(
       }
 
       if (typeof candidate.id === "string") {
-        if (scenarioIds.has(candidate.id)) {
+        if (savedScenarioIds.has(candidate.id)) {
           issues.push({ path: `${path}.id`, message: "Scenario IDs must be unique." });
         }
-        scenarioIds.add(candidate.id);
+        savedScenarioIds.add(candidate.id);
       }
     });
+    }
+  }
+
+  if (expectedSchemaVersion === SCHEMA_VERSION) {
+    const scenarioCount = Array.isArray(value.scenarios) ? value.scenarios.length : 0;
+    if (scenarioCount === 0 && value.currentScenarioId !== null) {
+      issues.push({
+        path: "$.currentScenarioId",
+        message: "A comparison with no options must have no current option.",
+      });
+    } else if (scenarioCount > 0) {
+      if (typeof value.currentScenarioId !== "string" || !value.currentScenarioId) {
+        issues.push({
+          path: "$.currentScenarioId",
+          message: "Choose the saved option that represents your current job and household position.",
+        });
+      } else if (!savedScenarioIds.has(value.currentScenarioId)) {
+        issues.push({ path: "$.currentScenarioId", message: "Current-position reference must match a saved place, job, or plan." });
+      }
     }
   }
 
@@ -859,6 +957,20 @@ export function validateWayfinderDocument(
     document: value as unknown as WayfinderDocument,
     migrated: false,
   };
+}
+
+export function validateWayfinderDocument(
+  value: unknown,
+  options: DocumentValidationOptions = {},
+): DocumentResult {
+  return validateKnownWayfinderDocument(value, options, SCHEMA_VERSION);
+}
+
+function validateV4WayfinderDocument(
+  value: unknown,
+  options: DocumentValidationOptions = {},
+): DocumentResult {
+  return validateKnownWayfinderDocument(value, options, V4_SCHEMA_VERSION);
 }
 
 type LegacyScenario = Record<string, unknown>;
@@ -871,8 +983,68 @@ function legacyNumber(value: unknown, path: string, issues: ValidationIssue[]) {
   return value;
 }
 
-function legacyString(value: unknown, fallback: string) {
-  return typeof value === "string" ? value : fallback;
+function legacyOptionalString(
+  value: unknown,
+  path: string,
+  issues: ValidationIssue[],
+) {
+  if (value === undefined) return "";
+  requiredString(value, path, issues, { allowEmpty: true, max: 1000 });
+  return typeof value === "string" ? value : "";
+}
+
+function legacyOptionalStringArray(
+  value: unknown,
+  path: string,
+  issues: ValidationIssue[],
+) {
+  if (value === undefined) return [];
+  validateStringArray(value, path, issues);
+  return Array.isArray(value) && value.every((item) => typeof item === "string")
+    ? value
+    : [];
+}
+
+function validateLegacyScenario(
+  candidate: LegacyScenario,
+  path: string,
+  issues: ValidationIssue[],
+) {
+  validateId(candidate.id, `${path}.id`, issues);
+  requiredString(candidate.flag, `${path}.flag`, issues, { max: 2 });
+  if (typeof candidate.flag === "string" && !COUNTRY_CODE_PATTERN.test(candidate.flag)) {
+    issues.push({ path: `${path}.flag`, message: "Expected a two-letter uppercase country code." });
+  }
+  requiredString(candidate.label, `${path}.label`, issues, { max: 160 });
+  requiredString(candidate.location, `${path}.location`, issues, { max: 240 });
+  requiredString(candidate.employment, `${path}.employment`, issues, { max: 500 });
+  requiredString(candidate.status, `${path}.status`, issues, { max: 120 });
+  validateCurrency(candidate.currency, `${path}.currency`, issues);
+  finiteNumber(candidate.fxToInr, `${path}.fxToInr`, issues, {
+    min: Number.EPSILON,
+  });
+  finiteNumber(candidate.earners, `${path}.earners`, issues, {
+    min: 0,
+    max: 20,
+    integer: true,
+  });
+  for (const key of [
+    "spouseJob",
+    "childcare",
+    "transport",
+    "residency",
+    "bonus",
+  ] as const) {
+    if (key in candidate) {
+      requiredString(candidate[key], `${path}.${key}`, issues, {
+        allowEmpty: true,
+        max: 1000,
+      });
+    }
+  }
+  for (const key of ["benefits", "risks"] as const) {
+    if (key in candidate) validateStringArray(candidate[key], `${path}.${key}`, issues);
+  }
 }
 
 function migrateLegacy(
@@ -910,6 +1082,7 @@ function migrateLegacy(
         issues.push({ path: `${path}.${key}`, message: "Missing required legacy field." });
       }
     }
+    validateLegacyScenario(candidate, path, issues);
   });
   if (issues.length) return { ok: false, issues };
 
@@ -918,16 +1091,30 @@ function migrateLegacy(
   document.fieldDefinitions = [
     ...document.fieldDefinitions,
     {
+      id: "legacy-gross-net-difference",
+      label: "Legacy gross-net difference (review required)",
+      description: "Preserved from a legacy backup; the original deduction category was not recorded.",
+      group: "deduction",
+      scope: "perOption",
+    },
+    {
+      id: "legacy-aggregate-living",
+      label: "Legacy aggregate living amount (review required)",
+      description: "Preserved from a legacy backup; individual living categories were not recorded.",
+      group: "livingCost",
+      scope: "perOption",
+    },
+    {
       id: "legacy-option-commitments",
-      label: "Legacy option commitments",
-      description: "Preserved from an older option; review in Shared settings.",
+      label: "Legacy option commitments (review required)",
+      description: "Preserved from a legacy backup; shared scope was not recorded.",
       group: "commitment",
       scope: "perOption",
     },
     {
       id: "legacy-option-investment",
-      label: "Legacy option investment target",
-      description: "Preserved from an older option; review in Shared settings.",
+      label: "Legacy option investment target (review required)",
+      description: "Preserved from a legacy backup; shared scope was not recorded.",
       group: "plannedInvestment",
       scope: "perOption",
     },
@@ -936,10 +1123,16 @@ function migrateLegacy(
   document.sharedEvidence = createSharedEvidence(document.fieldDefinitions);
   document.researchItems = [];
   document.migrationNotes = [
-    "Legacy totals were preserved as option-level fields. Review which commitments and investments should become shared.",
-    "Legacy gross-to-net differences were preserved as non-saving deductions because their original categories were not available.",
-    "Older conversion ratios had no date and must be verified before import.",
+    "Legacy option-level commitments and investment targets were preserved for review; shared scope was not recorded.",
+    "Legacy gross-to-net differences and aggregate living amounts were preserved in neutral review fields; original categories were not recorded.",
   ];
+  if (root.scenarios.some((candidate) => (
+    isRecord(candidate) && candidate.currency !== "INR"
+  ))) {
+    document.migrationNotes.push(
+      "Legacy non-base conversion rates are unresolved until a real rate, date, and source are supplied.",
+    );
+  }
 
   document.scenarios = root.scenarios.map((raw, index) => {
     const path = `$.scenarios[${index}]`;
@@ -953,8 +1146,8 @@ function migrateLegacy(
       issues.push({ path: `${path}.netMonthly`, message: "Net income exceeds gross income." });
     }
     const values = createEmptyValues(document.fieldDefinitions);
-    values["deduction-income-tax"] = Math.max(0, gross - net);
-    values["living-leisure"] = legacyNumber(
+    values["legacy-gross-net-difference"] = Math.max(0, gross - net);
+    values["legacy-aggregate-living"] = legacyNumber(
       candidate.localLiving,
       `${path}.localLiving`,
       issues,
@@ -971,17 +1164,19 @@ function migrateLegacy(
     );
 
     const scenario: Scenario = {
-      id: legacyString(candidate.id, createStableId("option")),
-      flag: legacyString(candidate.flag, "OLD").slice(0, 3),
-      label: legacyString(candidate.label, `Migrated option ${index + 1}`),
-      location: legacyString(candidate.location, "Location not recorded"),
-      employment: legacyString(candidate.employment, "Migrated household income"),
-      status: legacyString(candidate.status, "Migrated"),
-      currency: legacyString(candidate.currency, "INR").toUpperCase(),
+      id: candidate.id as string,
+      flag: candidate.flag as string,
+      label: candidate.label as string,
+      location: candidate.location as string,
+      employment: candidate.employment as string,
+      status: candidate.status as string,
+      currency: candidate.currency as string,
       fx: {
         rateToBase: legacyNumber(candidate.fxToInr, `${path}.fxToInr`, issues),
         asOf: null,
-        source: "Older import — verify this conversion ratio",
+        source: candidate.currency === "INR"
+          ? ""
+          : "Older import — verify this conversion ratio",
       },
       grossMonthly: gross,
       values,
@@ -992,30 +1187,28 @@ function migrateLegacy(
             {
               status: "unknown",
               asOf: null,
-              source: "Older import",
-              note: "Review and confirm this migrated input.",
+              source: "",
+              note: "",
             },
           ],
         ),
       ),
-      earners:
-        typeof candidate.earners === "number" && Number.isInteger(candidate.earners)
-          ? Math.max(0, candidate.earners)
-          : 1,
+      earners: candidate.earners as number,
       color:
         typeof candidate.color === "string" && COLOR_PATTERN.test(candidate.color)
           ? candidate.color
           : "#7cb8ff",
-      spouseJob: legacyString(candidate.spouseJob, "Not recorded"),
-      childcare: legacyString(candidate.childcare, "Not recorded"),
-      transport: legacyString(candidate.transport, "Not recorded"),
-      residency: legacyString(candidate.residency, "Not recorded"),
-      bonus: legacyString(candidate.bonus, "Not included"),
-      benefits: Array.isArray(candidate.benefits) ? candidate.benefits.map(String) : [],
-      risks: Array.isArray(candidate.risks) ? candidate.risks.map(String) : [],
+      spouseJob: legacyOptionalString(candidate.spouseJob, `${path}.spouseJob`, issues),
+      childcare: legacyOptionalString(candidate.childcare, `${path}.childcare`, issues),
+      transport: legacyOptionalString(candidate.transport, `${path}.transport`, issues),
+      residency: legacyOptionalString(candidate.residency, `${path}.residency`, issues),
+      bonus: legacyOptionalString(candidate.bonus, `${path}.bonus`, issues),
+      benefits: legacyOptionalStringArray(candidate.benefits, `${path}.benefits`, issues),
+      risks: legacyOptionalStringArray(candidate.risks, `${path}.risks`, issues),
     };
     return scenario;
   });
+  document.currentScenarioId = document.scenarios[0]?.id ?? null;
   document.updatedAt = new Date().toISOString();
 
   if (issues.length) return { ok: false, issues };
@@ -1024,10 +1217,67 @@ function migrateLegacy(
   return { ok: true, document: validated.document, migrated: true };
 }
 
+function isCanonicalV4Document(value: unknown): value is Record<string, unknown> {
+  return isRecord(value) &&
+    value.kind === DOCUMENT_KIND &&
+    value.schemaVersion === V4_SCHEMA_VERSION;
+}
+
+function migrateV4Document(
+  value: Record<string, unknown>,
+  options: DocumentValidationOptions = {},
+): DocumentResult {
+  const v4Validation = validateV4WayfinderDocument(value, options);
+  if (!v4Validation.ok) return v4Validation;
+
+  const scenarios = Array.isArray(value.scenarios) ? value.scenarios : [];
+  for (let index = 0; index < scenarios.length; index += 1) {
+    const scenario = scenarios[index];
+    if (isRecord(scenario) && !COUNTRY_CODE_PATTERN.test(String(scenario.flag))) {
+      return {
+        ok: false,
+        issues: [{
+          path: `$.scenarios[${index}].flag`,
+          message: "This older country badge cannot be used as a two-letter country code. Replace it with the correct two-letter country code before importing; the original file is unchanged.",
+        }],
+      };
+    }
+  }
+
+  const firstScenario = isRecord(scenarios[0])
+    ? scenarios[0]
+    : null;
+  const currentScenarioId = typeof firstScenario?.id === "string"
+    ? firstScenario.id
+    : null;
+  const v4MigrationNotes = Array.isArray(value.migrationNotes)
+    ? value.migrationNotes.filter((note): note is string => typeof note === "string")
+    : [];
+  const migratedSystemNotes = new Set(
+    v4MigrationNotes.filter((note) => LEGACY_MIGRATION_NOTES.has(note)),
+  );
+  if (v4MigrationNotes.some((note) => !LEGACY_MIGRATION_NOTES.has(note))) {
+    migratedSystemNotes.add(V4_MIGRATION_NOTES_RETAINED);
+  }
+  const upgraded = {
+    ...value,
+    schemaVersion: SCHEMA_VERSION,
+    currentScenarioId,
+    migrationNotes: [...migratedSystemNotes],
+    legacyMigrationNotes: v4MigrationNotes,
+  };
+  const validated = validateWayfinderDocument(upgraded, options);
+  if (!validated.ok) return validated;
+  return { ok: true, document: validated.document, migrated: true };
+}
+
 export function parseWayfinderDocument(
   value: unknown,
   options: DocumentValidationOptions = {},
 ): DocumentResult {
+  if (isCanonicalV4Document(value)) {
+    return migrateV4Document(value, options);
+  }
   if (isRecord(value) && ("kind" in value || "schemaVersion" in value)) {
     return validateWayfinderDocument(value, options);
   }

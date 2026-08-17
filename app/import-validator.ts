@@ -1,4 +1,5 @@
 import generatedSchemaValidator from "./wayfinder-schema-validator.generated.mjs";
+import generatedV4SchemaValidator from "./wayfinder-v4-schema-validator.generated.mjs";
 import {
   parseWayfinderDocument,
   type DocumentValidationOptions,
@@ -22,7 +23,8 @@ type SchemaValidator = ((value: unknown) => boolean) & {
   errors?: SchemaValidationError[] | null;
 };
 
-const validateSchema = generatedSchemaValidator as SchemaValidator;
+const validateV5Schema = generatedSchemaValidator as SchemaValidator;
+const validateV4Schema = generatedV4SchemaValidator as SchemaValidator;
 
 function pathFromPointer(pointer: string) {
   if (!pointer) return "$";
@@ -42,8 +44,8 @@ function pathFromPointer(pointer: string) {
     );
 }
 
-function schemaIssues(): ValidationIssue[] {
-  return (validateSchema.errors ?? []).map((error) => {
+function schemaIssues(validator: SchemaValidator): ValidationIssue[] {
+  return (validator.errors ?? []).map((error) => {
     let path = pathFromPointer(error.instancePath);
     if (
       (error.keyword === "required" || error.keyword === "additionalProperties")
@@ -75,26 +77,45 @@ function legacyInput(value: unknown) {
     && Array.isArray(value.scenarios);
 }
 
-function validateV4Schema(value: unknown): ValidationIssue[] | null {
-  return validateSchema(value) ? null : schemaIssues();
+function validateGeneratedSchema(
+  validator: SchemaValidator,
+  value: unknown,
+): ValidationIssue[] | null {
+  return validator(value) ? null : schemaIssues(validator);
+}
+
+function canonicalV4Input(value: unknown) {
+  return isRecord(value)
+    && value.kind === "wayfinder-relocation-plan"
+    && value.schemaVersion === 4;
 }
 
 /**
- * Validates data at every import boundary. v4 candidates are schema-checked
- * before semantic validation; the recognized legacy shape migrates first and
- * the resulting v4 document is schema-checked before it is accepted.
+ * Validates data at every import boundary. v5 candidates are schema-checked
+ * before semantic validation. A recognized v4 document is first checked
+ * against the retained closed v4 schema, then migrated and v5 schema-checked.
+ * The recognized legacy shape migrates first and its v5 result is schema-checked.
  */
 export function validateWayfinderInput(
   value: unknown,
   options: DocumentValidationOptions = {},
 ): DocumentResult {
+  if (canonicalV4Input(value)) {
+    const v4Issues = validateGeneratedSchema(validateV4Schema, value);
+    if (v4Issues) return { ok: false, issues: v4Issues };
+    const result = parseWayfinderDocument(value, options);
+    if (!result.ok) return result;
+    const v5Issues = validateGeneratedSchema(validateV5Schema, result.document);
+    return v5Issues ? { ok: false, issues: v5Issues } : result;
+  }
+
   if (!legacyInput(value)) {
-    const issues = validateV4Schema(value);
+    const issues = validateGeneratedSchema(validateV5Schema, value);
     return issues ? { ok: false, issues } : parseWayfinderDocument(value, options);
   }
 
   const result = parseWayfinderDocument(value, options);
   if (!result.ok) return result;
-  const issues = validateV4Schema(result.document);
+  const issues = validateGeneratedSchema(validateV5Schema, result.document);
   return issues ? { ok: false, issues } : result;
 }

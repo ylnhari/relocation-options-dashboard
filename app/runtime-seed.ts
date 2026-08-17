@@ -26,7 +26,7 @@ export function parseRuntimeSeed(value = injectedSeedSource()): RuntimeSeedResul
   }
   try {
     const result = validateWayfinderInput(JSON.parse(value));
-    // A runtime starter must already be a v4 document. Browser storage keeps
+    // A runtime starter must already be a v5 document. Browser storage keeps
     // its existing supported legacy migration path separately.
     if (!result.ok || result.migrated) return { status: "invalid" };
     return { status: "valid", document: syncDocumentFields(result.document) };

@@ -326,3 +326,184 @@ test("projects gross, net cash, savings, investments, and cash without mutation"
   assert.deepEqual(document, beforeDocument);
   assert.deepEqual(scenario, beforeScenario);
 });
+
+test("keeps the saving identity true for every projected year across varied inputs", () => {
+  const fixtures = [
+    {
+      name: "growing income with rising costs",
+      assumptions: { incomeGrowthPct: 8.5, expenseInflationPct: 4.25, years: 7 },
+      grossMonthly: 8_250.75,
+      values: {
+        "deduction-income-tax": 1_830.2,
+        "deduction-payroll": 245.4,
+        "automatic-retirement": 610.6,
+        "living-housing": 2_100.33,
+        "living-groceries": 735.71,
+      },
+      sharedValues: {
+        "shared-debt": 440.25,
+        "shared-remittances": 310.5,
+        "shared-other-commitment": 0,
+        "shared-market-investing": 950.8,
+        "shared-other-investing": 125.65,
+      },
+    },
+    {
+      name: "flat income with a cash deficit",
+      assumptions: { incomeGrowthPct: 0, expenseInflationPct: 0, years: 4 },
+      grossMonthly: 1_200,
+      values: {
+        "deduction-income-tax": 150,
+        "automatic-retirement": 90,
+        "living-housing": 640,
+        "living-transport": 160,
+      },
+      sharedValues: {
+        "shared-debt": 300,
+        "shared-remittances": 0,
+        "shared-other-commitment": 0,
+        "shared-market-investing": 500,
+        "shared-other-investing": 0,
+      },
+    },
+    {
+      name: "declining income with lower recurring costs",
+      assumptions: { incomeGrowthPct: -3, expenseInflationPct: -1.5, years: 5 },
+      grossMonthly: 4_000,
+      values: {
+        "deduction-income-tax": 750,
+        "deduction-other": 125,
+        "automatic-retirement": 275,
+        "living-housing": 1_100,
+        "living-healthcare": 180,
+      },
+      sharedValues: {
+        "shared-debt": 0,
+        "shared-remittances": 250,
+        "shared-other-commitment": 75,
+        "shared-market-investing": 200,
+        "shared-other-investing": 50,
+      },
+    },
+  ];
+
+  for (const fixture of fixtures) {
+    const document = createDocument({
+      sharedValues: fixture.sharedValues,
+      projectionAssumptions: fixture.assumptions,
+    });
+    const scenario = createScenario(document, {
+      grossMonthly: fixture.grossMonthly,
+      values: fixture.values,
+    });
+    const projection = projectScenario(document, scenario);
+
+    assert.equal(projection.length, fixture.assumptions.years, fixture.name);
+    for (const year of projection) {
+      assert.equal(
+        rounded(year.totalSavingBase),
+        rounded(year.totalInvestmentBase + year.cashRemainingBase),
+        `${fixture.name}, year ${year.year}`,
+      );
+      assert.equal(
+        rounded(year.annualSavingBase),
+        rounded(year.annualInvestmentBase + year.annualCashRemainingBase),
+        `${fixture.name}, annual year ${year.year}`,
+      );
+    }
+  }
+});
+
+test("excluded support cannot affect totals, projections, or option ranking", () => {
+  const document = createDocument({
+    sharedValues: {
+      "shared-debt": 150,
+      "shared-remittances": 0,
+      "shared-other-commitment": 0,
+      "shared-market-investing": 200,
+      "shared-other-investing": 0,
+    },
+    projectionAssumptions: {
+      incomeGrowthPct: 6,
+      expenseInflationPct: 2.5,
+      years: 6,
+    },
+  });
+  const options = [
+    createScenario(document, {
+      id: "synthetic-higher-saving",
+      label: "Higher saving",
+      grossMonthly: 5_200,
+      values: {
+        "deduction-income-tax": 1_150,
+        "automatic-retirement": 380,
+        "living-housing": 1_100,
+        "living-groceries": 420,
+      },
+    }),
+    createScenario(document, {
+      id: "synthetic-lower-saving",
+      label: "Lower saving",
+      grossMonthly: 4_600,
+      values: {
+        "deduction-income-tax": 1_030,
+        "automatic-retirement": 275,
+        "living-housing": 1_500,
+        "living-groceries": 620,
+      },
+    }),
+  ];
+  const withSupport = {
+    ...document,
+    excludedSupport: [
+      {
+        id: "synthetic-possible-support-a",
+        label: "Possible family contribution",
+        monthlyBase: 9_999_999,
+        note: "A fictional context-only amount.",
+      },
+      {
+        id: "synthetic-possible-support-b",
+        label: "Possible bill payment",
+        monthlyBase: 0.01,
+        note: "Another fictional context-only amount.",
+      },
+    ],
+  };
+
+  const totalKeys = [
+    "grossBase",
+    "deductionBase",
+    "automaticInvestmentBase",
+    "netCashBase",
+    "livingBase",
+    "commitmentBase",
+    "plannedInvestmentBase",
+    "totalInvestmentBase",
+    "totalSavingBase",
+    "cashRemainingBase",
+  ];
+  const baseline = options.map((scenario) => deriveScenario(document, scenario));
+  const supported = options.map((scenario) => deriveScenario(withSupport, scenario));
+
+  assert.deepEqual(
+    supported.map((scenario) => scenario.id),
+    baseline.map((scenario) => scenario.id),
+  );
+  for (let index = 0; index < baseline.length; index += 1) {
+    for (const key of totalKeys) {
+      assert.equal(supported[index][key], baseline[index][key], `${supported[index].label}: ${key}`);
+    }
+    assert.deepEqual(
+      projectScenario(withSupport, options[index]),
+      projectScenario(document, options[index]),
+      `${supported[index].label}: projections`,
+    );
+  }
+
+  const rank = (items) => items
+    .slice()
+    .sort((left, right) => right.totalSavingBase - left.totalSavingBase)
+    .map((item) => item.id);
+  assert.deepEqual(rank(supported), rank(baseline));
+});

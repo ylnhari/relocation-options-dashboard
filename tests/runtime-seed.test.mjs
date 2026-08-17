@@ -29,12 +29,12 @@ async function exampleDocument() {
   );
 }
 
-test("runtime seeds accept only an already-valid v4 document", async () => {
+test("runtime seeds accept only an already-valid v5 document", async () => {
   const document = await exampleDocument();
   const valid = parseRuntimeSeed(JSON.stringify(document));
   assert.equal(valid.status, "valid");
   if (valid.status === "valid") {
-    assert.equal(valid.document.schemaVersion, 4);
+    assert.equal(valid.document.schemaVersion, 5);
     assert.deepEqual(valid.document.scenarios.map((scenario) => scenario.id), document.scenarios.map((scenario) => scenario.id));
   }
 
@@ -103,4 +103,16 @@ test("runtime-seed source keeps an ordinary public build seed-free", async () =>
   assert.match(source, /typeof __WAYFINDER_RUNTIME_SEED__ === "string"/);
   assert.match(source, /return \{ status: "missing" \}/);
   assert.doesNotMatch(source, /private-data|[A-Z]:[\\/](?:Users|Documents)[\\/]/i);
+});
+
+test("Vite reads a seed only from the launcher-provided per-user runtime directory", async () => {
+  const source = await readFile(new URL("../vite.config.ts", import.meta.url), "utf8");
+
+  assert.match(source, /process\.env\.WAYFINDER_RUNTIME_SEED_DIR/);
+  assert.match(source, /!RUNTIME_SEED_DIR \|\| !isAbsolute\(RUNTIME_SEED_DIR\)/);
+  assert.match(source, /statSync\(seedDirectory\)\.isDirectory\(\)/);
+  assert.match(source, /relative\(resolve\(process\.cwd\(\)\), seedDirectory\)/);
+  assert.match(source, /resolve\(seedDirectory, `wayfinder-runtime-seed-\$\{RUNTIME_SEED_ID\}\.json`\)/);
+  assert.match(source, /fstatSync\(handle\)[\s\S]*details\.isFile\(\)[\s\S]*details\.size > MAX_RUNTIME_SEED_BYTES[\s\S]*readSync\(handle, bytes, 0, bytes\.length, 0\)/);
+  assert.doesNotMatch(source, /process\.cwd\(\)[\s\S]*\.local/);
 });

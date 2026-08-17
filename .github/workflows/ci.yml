@@ -18,6 +18,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Node.js 22
         uses: actions/setup-node@v4
@@ -27,6 +29,11 @@ jobs:
 
       - name: Install locked dependencies
         run: npm ci
+
+      - name: Check public candidate safety
+        env:
+          PUBLIC_SAFETY_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: npm run check:public-safety
 
       - name: Validate fictional examples
         run: npm run validate:examples

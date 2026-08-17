@@ -1,5 +1,5 @@
 export const DOCUMENT_KIND = "wayfinder-relocation-plan" as const;
-export const SCHEMA_VERSION = 4 as const;
+export const SCHEMA_VERSION = 5 as const;
 export const STORAGE_KEY = "wayfinder.document.v4";
 export const LEGACY_STORAGE_KEY = "wayfinder.relocation-scenarios.v1";
 export const DEFAULT_BASE_CURRENCY = "USD";
@@ -113,7 +113,9 @@ export type WayfinderDocument = {
   researchItems: ResearchItem[];
   projectionAssumptions: ProjectionAssumptions;
   scenarios: Scenario[];
+  currentScenarioId: string | null;
   migrationNotes: string[];
+  legacyMigrationNotes: string[];
   updatedAt: string;
 };
 
@@ -182,7 +184,7 @@ export const DEFAULT_FIELD_DEFINITIONS: FieldDefinition[] = [
   {
     id: "living-housing",
     label: "Housing",
-    description: "Rent, mortgage interest, maintenance, or housing charges for this option.",
+    description: "Rent, mortgage interest, maintenance, or housing charges for this place, job, or household plan.",
     group: "livingCost",
     scope: "perOption",
   },
@@ -237,36 +239,36 @@ export const DEFAULT_FIELD_DEFINITIONS: FieldDefinition[] = [
   },
   {
     id: "shared-debt",
-    label: "Debt repayments",
-    description: "Loans or repayments that continue in every option.",
+    label: "Loan payments that stay the same after a move",
+    description: "Monthly loan or debt payments entered once because the same amount continues in every place, job, or household plan.",
     group: "commitment",
     scope: "shared",
   },
   {
     id: "shared-remittances",
-    label: "Family support or remittances paid",
-    description: "Outgoing family costs that remain your responsibility in every option.",
+    label: "Money sent to family or maintained at home",
+    description: "Monthly support, remittances, or home-country household costs entered once because the same amount continues in every plan.",
     group: "commitment",
     scope: "shared",
   },
   {
     id: "shared-other-commitment",
-    label: "Other shared commitments",
-    description: "Other recurring obligations applied equally to every option.",
+    label: "Other monthly obligations that stay the same",
+    description: "Insurance or another recurring payment entered once only when the same amount applies to every plan.",
     group: "commitment",
     scope: "shared",
   },
   {
     id: "shared-market-investing",
-    label: "Market investments",
-    description: "Planned post-tax investing applied equally to every option.",
+    label: "Monthly market investments kept in every plan",
+    description: "Post-tax investing entered once only when you intend to keep the same monthly amount in every plan.",
     group: "plannedInvestment",
     scope: "shared",
   },
   {
     id: "shared-other-investing",
-    label: "Other planned investment",
-    description: "Other planned saving or investment applied equally to every option.",
+    label: "Other monthly saving or investing kept in every plan",
+    description: "Another post-tax saving or investment entered once only when the same monthly amount applies to every plan.",
     group: "plannedInvestment",
     scope: "shared",
   },
@@ -324,7 +326,7 @@ export function createWayfinderDocument(
   return {
     kind: DOCUMENT_KIND,
     schemaVersion: SCHEMA_VERSION,
-    title: "My relocation options",
+    title: "My current job and possible moves",
     baseCurrency,
     locale: "en-US",
     fieldDefinitions: fields,
@@ -338,7 +340,9 @@ export function createWayfinderDocument(
       years: 1,
     },
     scenarios: [],
+    currentScenarioId: null,
     migrationNotes: [],
+    legacyMigrationNotes: [],
     updatedAt: new Date(0).toISOString(),
   };
 }

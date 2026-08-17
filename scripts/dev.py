@@ -14,11 +14,11 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parent.parent
-RUNTIME_SEED_DIR = ROOT / ".local"
 MAX_DOCUMENT_BYTES = 2 * 1024 * 1024
 DOCUMENT_ENV_VAR = "WAYFINDER_DOCUMENT"
 RUNTIME_SEED_ENABLED_ENV_VAR = "WAYFINDER_RUNTIME_SEED_ENABLED"
 RUNTIME_SEED_ID_ENV_VAR = "WAYFINDER_RUNTIME_SEED_ID"
+RUNTIME_SEED_DIR_ENV_VAR = "WAYFINDER_RUNTIME_SEED_DIR"
 RUNTIME_SEED_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{16,128}$")
 LEASE_OWNER_KEY = "ownerPid"
 LEASE_IDENTITY_KEY = "ownerIdentity"
@@ -31,6 +31,33 @@ from portlib import PortError, resolve_port  # noqa: E402
 
 class RuntimeSeedError(Exception):
     pass
+
+
+def default_runtime_seed_dir(environment: dict[str, str] | None = None) -> Path | None:
+    """Return the Windows per-user runtime location without a repo fallback."""
+    local_app_data = (os.environ if environment is None else environment).get("LOCALAPPDATA")
+    if not local_app_data:
+        return None
+    candidate = Path(local_app_data)
+    if not candidate.is_absolute():
+        return None
+    return candidate / "Wayfinder" / "runtime-seeds"
+
+
+# Tests may inject this module value. Production never falls back to a path in
+# the checkout: a runtime starter must not leave private artifacts in the repo.
+RUNTIME_SEED_DIR = default_runtime_seed_dir()
+
+
+def runtime_seed_dir() -> Path:
+    if not isinstance(RUNTIME_SEED_DIR, Path) or not RUNTIME_SEED_DIR.is_absolute():
+        raise RuntimeSeedError("could not determine the Windows runtime seed directory")
+    resolved = RUNTIME_SEED_DIR.resolve(strict=False)
+    try:
+        resolved.relative_to(ROOT.resolve())
+    except ValueError:
+        return resolved
+    raise RuntimeSeedError("the Windows runtime seed directory must be outside the repository")
 
 
 def is_windows() -> bool:
@@ -74,14 +101,14 @@ def artifact_path(seed_id: str, *, candidate: bool = False) -> Path:
     if not RUNTIME_SEED_ID_PATTERN.fullmatch(seed_id):
         raise RuntimeSeedError("could not identify the local runtime seed artifact")
     suffix = ".candidate" if candidate else ""
-    return RUNTIME_SEED_DIR / f"wayfinder-runtime-seed-{seed_id}{suffix}.json"
+    return runtime_seed_dir() / f"wayfinder-runtime-seed-{seed_id}{suffix}.json"
 
 
 def lease_path(seed_id: str, *, candidate: bool = False) -> Path:
     if not RUNTIME_SEED_ID_PATTERN.fullmatch(seed_id):
         raise RuntimeSeedError("could not identify the local runtime seed artifact")
     suffix = ".lease.candidate.json" if candidate else ".lease.json"
-    return RUNTIME_SEED_DIR / f"wayfinder-runtime-seed-{seed_id}{suffix}"
+    return runtime_seed_dir() / f"wayfinder-runtime-seed-{seed_id}{suffix}"
 
 
 def process_is_live(pid: int) -> bool:
@@ -180,7 +207,7 @@ def establish_windows_job_containment() -> int | None:
 
 
 def create_seed_lease(seed_id: str, owner_pid: int) -> None:
-    RUNTIME_SEED_DIR.mkdir(parents=True, exist_ok=True)
+    runtime_seed_dir().mkdir(parents=True, exist_ok=True)
     identity = process_creation_identity(owner_pid)
     if is_windows() and identity is None:
         raise RuntimeSeedError("could not identify the Windows runtime seed owner")
@@ -210,7 +237,7 @@ def cleanup_runtime_seed(seed_id: str) -> None:
 def recover_stale_runtime_seeds() -> None:
     """Reclaim only exact artifacts whose well-formed lease owner is dead."""
     try:
-        leases = list(RUNTIME_SEED_DIR.glob("wayfinder-runtime-seed-*.lease.json"))
+        leases = list(runtime_seed_dir().glob("wayfinder-runtime-seed-*.lease.json"))
     except FileNotFoundError:
         return
     except OSError as exc:
@@ -243,7 +270,7 @@ def recover_stale_runtime_seeds() -> None:
 
 
 def copy_bounded_document(source_path: Path, candidate_path: Path) -> None:
-    RUNTIME_SEED_DIR.mkdir(parents=True, exist_ok=True)
+    runtime_seed_dir().mkdir(parents=True, exist_ok=True)
     try:
         with source_path.open("rb") as source, candidate_path.open("xb") as candidate:
             # Verify the exact opened handle, not the path before opening it.
@@ -278,19 +305,19 @@ def validate_runtime_seed(candidate_path: Path) -> None:
         check=False,
     )
     if result.returncode != 0:
-        raise RuntimeSeedError("the supplied document is not a valid v4 Wayfinder document")
+        raise RuntimeSeedError("the supplied document is not a valid v5 Wayfinder document")
     try:
         report = json.loads(result.stdout)
     except json.JSONDecodeError as exc:
         raise RuntimeSeedError("the document validator did not return a usable result") from exc
     if (
         report.get("ok") is not True
-        or report.get("schemaVersion") != 4
+        or report.get("schemaVersion") != 5
         or not isinstance(report.get("migrated"), bool)
     ):
-        raise RuntimeSeedError("the supplied document is not a valid v4 Wayfinder document")
+        raise RuntimeSeedError("the supplied document is not a valid v5 Wayfinder document")
     if report["migrated"]:
-        raise RuntimeSeedError("the supplied document must already use Wayfinder v4")
+        raise RuntimeSeedError("the supplied document must already use Wayfinder v5")
 
 
 def prepare_runtime_seed(document_path: str | None) -> str | None:
@@ -371,9 +398,11 @@ def main(argv: list[str] | None = None) -> int:
         if runtime_seed_id:
             env[RUNTIME_SEED_ENABLED_ENV_VAR] = "1"
             env[RUNTIME_SEED_ID_ENV_VAR] = runtime_seed_id
+            env[RUNTIME_SEED_DIR_ENV_VAR] = str(runtime_seed_dir())
         else:
             env.pop(RUNTIME_SEED_ENABLED_ENV_VAR, None)
             env.pop(RUNTIME_SEED_ID_ENV_VAR, None)
+            env.pop(RUNTIME_SEED_DIR_ENV_VAR, None)
         env.setdefault("WRANGLER_LOG_PATH", ".wrangler/wrangler.log")
         command = [npm, "run", "dev", "--", "--port", str(port)]
         print(f"Wayfinder: http://127.0.0.1:{port}")

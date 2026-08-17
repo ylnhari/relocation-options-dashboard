@@ -1,6 +1,6 @@
 # Research methodology
 
-Research records explain the assumptions behind an option; they do not calculate a winner. Each v4 `researchItem` records a topic, concise finding, applicable option IDs, status, publisher, source title, source URL, date, and note.
+Research records explain the assumptions behind an option; they do not calculate a winner. Each v5 `researchItem` records a topic, concise finding, applicable option IDs, status, publisher, source title, source URL, date, and note.
 
 ## Record evidence with its limits
 

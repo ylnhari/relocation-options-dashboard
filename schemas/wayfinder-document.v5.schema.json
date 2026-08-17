@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wayfinder.local/schemas/wayfinder-document.v5.schema.json",
+  "title": "Wayfinder relocation plan v5",
+  "description": "Editable inputs only. Calculated totals and projections are deliberately not part of the document format.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["kind", "schemaVersion", "title", "baseCurrency", "locale", "fieldDefinitions", "sharedValues", "sharedEvidence", "excludedSupport", "researchItems", "projectionAssumptions", "scenarios", "currentScenarioId", "migrationNotes", "legacyMigrationNotes", "updatedAt"],
+  "properties": {
+    "kind": { "const": "wayfinder-relocation-plan" },
+    "schemaVersion": { "const": 5 },
+    "title": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "baseCurrency": { "$ref": "wayfinder-document.v4.schema.json#/$defs/currency" },
+    "locale": { "type": "string", "minLength": 1, "maxLength": 50 },
+    "fieldDefinitions": { "type": "array", "maxItems": 100, "items": { "$ref": "wayfinder-document.v4.schema.json#/$defs/fieldDefinition" } },
+    "sharedValues": { "$ref": "wayfinder-document.v4.schema.json#/$defs/valueMap" },
+    "sharedEvidence": { "$ref": "wayfinder-document.v4.schema.json#/$defs/evidenceMap" },
+    "excludedSupport": { "type": "array", "maxItems": 100, "items": { "$ref": "wayfinder-document.v4.schema.json#/$defs/excludedSupport" } },
+    "researchItems": { "type": "array", "maxItems": 100, "items": { "$ref": "wayfinder-document.v4.schema.json#/$defs/researchItem" } },
+    "projectionAssumptions": { "$ref": "wayfinder-document.v4.schema.json#/$defs/projectionAssumptions" },
+    "scenarios": { "type": "array", "maxItems": 25, "items": { "$ref": "#/$defs/scenario" } },
+    "currentScenarioId": { "type": ["string", "null"] },
+    "migrationNotes": {
+      "type": "array",
+      "maxItems": 8,
+      "items": {
+        "type": "string",
+        "pattern": "^(?:Legacy option-level commitments and investment targets were preserved for review; shared scope was not recorded\\.|Legacy gross-to-net differences and aggregate living amounts were preserved in neutral review fields; original categories were not recorded\\.|Legacy non-base conversion rates are unresolved until a real rate, date, and source are supplied\\.|Legacy totals were preserved as option-level fields\\. Review which commitments and investments should become shared\\.|Legacy gross-to-net differences were preserved as non-saving deductions because their original categories were not available\\.|Older conversion ratios had no date and must be verified before import\\.|Legacy FX rates had no as-of date and should be verified\\.|Migration notes from a v4 file were retained for review\\.)$"
+      }
+    },
+    "legacyMigrationNotes": {
+      "type": "array",
+      "maxItems": 50,
+      "items": { "type": "string", "minLength": 1, "maxLength": 1000 }
+    },
+    "updatedAt": { "type": "string", "minLength": 1, "maxLength": 50 }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "scenarios": { "type": "array", "maxItems": 0 } }, "required": ["scenarios"] },
+      "then": { "properties": { "currentScenarioId": { "const": null } } },
+      "else": {
+        "properties": {
+          "currentScenarioId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "scenario": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "flag", "label", "location", "employment", "status", "currency", "fx", "grossMonthly", "values", "evidence", "earners", "color", "spouseJob", "childcare", "transport", "residency", "bonus", "benefits", "risks"],
+      "properties": {
+        "id": { "$ref": "wayfinder-document.v4.schema.json#/$defs/id" },
+        "flag": { "type": "string", "pattern": "^[A-Z]{2}$" },
+        "label": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "location": { "type": "string", "minLength": 1, "maxLength": 240 },
+        "employment": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "status": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "currency": { "$ref": "wayfinder-document.v4.schema.json#/$defs/currency" },
+        "fx": { "$ref": "wayfinder-document.v4.schema.json#/$defs/fxSnapshot" },
+        "grossMonthly": { "$ref": "wayfinder-document.v4.schema.json#/$defs/amount" },
+        "values": { "$ref": "wayfinder-document.v4.schema.json#/$defs/valueMap" },
+        "evidence": { "$ref": "wayfinder-document.v4.schema.json#/$defs/evidenceMap" },
+        "earners": { "type": "integer", "minimum": 0, "maximum": 20 },
+        "color": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
+        "spouseJob": { "type": "string", "maxLength": 1000 },
+        "childcare": { "type": "string", "maxLength": 1000 },
+        "transport": { "type": "string", "maxLength": 1000 },
+        "residency": { "type": "string", "maxLength": 1000 },
+        "bonus": { "type": "string", "maxLength": 1000 },
+        "benefits": { "type": "array", "maxItems": 50, "items": { "type": "string", "minLength": 1, "maxLength": 1000 } },
+        "risks": { "type": "array", "maxItems": 50, "items": { "type": "string", "minLength": 1, "maxLength": 1000 } }
+      }
+    }
+  }
+}

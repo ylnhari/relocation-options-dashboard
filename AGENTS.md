@@ -13,7 +13,8 @@ The versioned Wayfinder document is the single source of truth:
 - derived calculations and projections: `app/scenario-math.ts`;
 - browser UI and import preview: `app/page.tsx`;
 - standalone read-only report: `app/share-report.ts`;
-- public contract: `schemas/wayfinder-document.v4.schema.json`;
+- public contract: `schemas/wayfinder-document.v5.schema.json` (with the closed
+  v4 schema retained only for validated migration);
 - fictional examples: `examples/`;
 - CLI validation: `scripts/validate-data.mjs`.
 
@@ -28,8 +29,11 @@ facts may not be.
 
 ## Financial invariants
 
-- Common field definitions are edited once. Per-option fields appear in every
-  option; shared fields have one base-currency value applied to every option.
+- `currentScenarioId` identifies the current job and home-country household
+  position explicitly; array order never defines which plan is current.
+- Common field definitions are edited once. Per-plan fields appear in every
+  plan; amounts declared identical across every plan have one home/comparison-
+  currency value applied exactly once to each plan.
 - Gross compensation is explicit. Non-saving deductions and automatic payroll
   investments reconcile gross to net cash.
 - Automatic payroll investments and planned post-tax investments are savings,
@@ -42,7 +46,7 @@ facts may not be.
   certainty or quality scores.
 - Derived values are recomputed locally and are rejected if supplied as trusted
   agent inputs.
-- Every option in a currency other than the comparison currency requires an
+- Every plan in a currency other than the home/comparison currency requires an
   explicit positive conversion ratio, date, and source. Missing linked values,
   evidence, or conversion inputs invalidate the whole option/document before it
   can be saved or displayed.
@@ -64,9 +68,11 @@ facts may not be.
 - Never add payslips, transaction records, names, account details, credentials,
   real household figures, private URLs, browser exports, or machine paths to
   tracked files, examples, tests, screenshots, logs, or documentation.
-- Personal/runtime documents belong only in ignored paths such as
-  `private-data/`; `.gitignore` is not a substitute for inspecting the staged
-  tree and unpublished history before a public push.
+- Personal/runtime documents belong outside the repository in a user-restricted
+  application-data directory. Ignored `private-data/` and `.local/` paths are a
+  last-resort containment boundary, not approved long-term storage; `.gitignore`
+  is not a substitute for inspecting the staged tree and unpublished history
+  before a public push.
 - Browser data stays on the device. Do not add analytics, telemetry, cloud
   persistence, authentication, or automatic research fetching.
 - The family report must remain escaped, script-free, self-contained, and

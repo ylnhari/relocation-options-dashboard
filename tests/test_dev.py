@@ -42,6 +42,16 @@ class TestRuntimeSeedLauncher(unittest.TestCase):
         self.assertEqual(dev.artifact_path(seed_id).read_bytes(), self.example.read_bytes())
         self.assertFalse(dev.artifact_path(seed_id, candidate=True).exists())
 
+    def test_runtime_seed_directory_uses_per_user_local_app_data_not_the_checkout(self):
+        expected = Path(self.tmp.name) / "Wayfinder" / "runtime-seeds"
+        self.assertEqual(
+            dev.default_runtime_seed_dir({"LOCALAPPDATA": self.tmp.name}),
+            expected,
+        )
+        self.assertFalse(expected.is_relative_to(dev.ROOT))
+        self.assertIsNone(dev.default_runtime_seed_dir({"LOCALAPPDATA": "relative"}))
+        self.assertIsNone(dev.default_runtime_seed_dir({}))
+
     def test_unseeded_launch_does_not_delete_an_active_seed_artifact(self):
         self.seed_dir.mkdir()
         stale_id = "a" * 24
@@ -129,6 +139,11 @@ class TestRuntimeSeedLauncher(unittest.TestCase):
         with mock.patch.object(dev, "is_windows", return_value=True), mock.patch.object(dev, "establish_windows_job_containment", side_effect=dev.RuntimeSeedError("containment unavailable")):
             self.assertEqual(dev.main(["--document", str(self.example), "--port", "8780"]), 2)
         self.assertEqual(list(self.seed_dir.glob("wayfinder-runtime-seed-*")), [])
+
+    def test_seeded_start_fails_closed_without_a_runtime_seed_directory(self):
+        with mock.patch.object(dev, "RUNTIME_SEED_DIR", None), mock.patch.object(dev, "is_windows", return_value=True), mock.patch.object(dev.subprocess, "Popen") as launch:
+            self.assertEqual(dev.main(["--document", str(self.example), "--port", "8780"]), 2)
+        launch.assert_not_called()
 
     def test_non_windows_seed_fails_closed_before_artifact_creation(self):
         with mock.patch.object(dev, "is_windows", return_value=False), mock.patch.object(dev, "prepare_runtime_seed") as prepare, mock.patch("sys.stderr") as stderr:
@@ -245,9 +260,24 @@ class TestRuntimeSeedLauncher(unittest.TestCase):
         with mock.patch.object(dev, "is_windows", return_value=True), mock.patch.object(dev, "process_creation_identity", return_value="test-owner"), mock.patch.object(dev, "validate_runtime_seed"), mock.patch.object(dev.subprocess, "Popen", return_value=self.child()) as launch, mock.patch("sys.stderr") as stderr:
             self.assertEqual(dev.main(["--document", str(self.example), "--port", "8780"]), 0)
         launch.assert_called_once()
+        child_env = launch.call_args.kwargs["env"]
+        self.assertEqual(child_env[dev.RUNTIME_SEED_DIR_ENV_VAR], str(self.seed_dir))
+        self.assertRegex(child_env[dev.RUNTIME_SEED_ID_ENV_VAR], r"^[A-Za-z0-9_-]{16,128}$")
         message = "".join(str(call.args[0]) for call in stderr.write.call_args_list)
         self.assertIn("sends its starter document to every browser", message)
         self.assertEqual(list(self.seed_dir.glob("wayfinder-runtime-seed-*.json")), [])
+
+    def test_unseeded_launch_clears_inherited_runtime_seed_controls(self):
+        inherited = {
+            dev.RUNTIME_SEED_ENABLED_ENV_VAR: "1",
+            dev.RUNTIME_SEED_ID_ENV_VAR: "a" * 24,
+            dev.RUNTIME_SEED_DIR_ENV_VAR: str(self.seed_dir),
+        }
+        with mock.patch.dict(dev.os.environ, inherited), mock.patch.object(dev.subprocess, "Popen", return_value=self.child()) as launch:
+            self.assertEqual(dev.main(["--port", "8780"]), 0)
+        child_env = launch.call_args.kwargs["env"]
+        for name in inherited:
+            self.assertNotIn(name, child_env)
 
 
 if __name__ == "__main__":

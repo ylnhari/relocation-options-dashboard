@@ -1,57 +1,79 @@
 # Wayfinder — Relocation Decision Studio
 
 Wayfinder is an open-source, local-first dashboard for deciding whether a move,
-job offer, or household-income change is financially worthwhile. It compares
-every option with the same fields and formulas while keeping the user's data in
-their browser.
+job offer, or household-income change is financially worthwhile. Start with one
+explicit **current job and home-country household position**, then compare it
+with possible jobs, moves, or household plans. Your data stays in your browser.
 
 It is built for two equally supported workflows:
 
-- **Manual:** enter shared settings once, then fill the current situation and each alternative.
-- **Agentic:** give an agent the versioned template and JSON Schema, validate
-  the completed document, preview it, and import it atomically.
+- **Manual:** choose a home/comparison currency, enter the current position,
+  then add each possible job, move, or household plan.
+- **With an assistant or agent:** give it the versioned template and JSON
+  Schema, validate the completed comparison file, preview it, and import it
+  safely as one complete replacement.
 
 The repository contains no household defaults. A clean browser opens empty.
 
+### Key terms
+
+- **Current position:** the one saved plan that represents your current job and
+  household. It is chosen explicitly, never inferred from the order of cards.
+- **Possible plan:** a job, move, or household arrangement you want to compare
+  with the current position.
+- **Home/comparison currency:** the currency that anchors totals and charts.
+  Amounts from a plan using another currency are converted to it.
+- **Amount entered once for every plan:** a recurring amount in the
+  home/comparison currency, such as a loan payment or money sent home, that is
+  counted once in each plan because it genuinely stays the same.
+- **Plan currency:** the currency used in one current or possible plan; the app
+  shows its linked home/comparison-currency amount beside it.
+- **Future estimate:** a chart that applies the income-growth and cost-increase
+  assumptions you choose. It is not a prediction or guarantee.
+
 ## What makes the comparison auditable
 
-- One user-selected comparison currency and an explicit, dated conversion ratio per option.
-- Gross compensation visible on every tile.
-- Itemized non-saving deductions, automatic payroll investments, living costs,
-  continuing commitments, and planned investments.
-- Common field definitions managed once instead of being hard-coded inside
-  every option.
-- Shared commitments and shared investment targets entered once in the base
-  currency and applied equally to every option.
+- One user-selected home/comparison currency and an explicit, dated conversion
+  ratio with a source for every plan that uses another currency.
+- Monthly income before tax and deductions visible on every tile.
+- Itemized tax and other deductions, automatic payroll savings, monthly
+  household costs, monthly obligations that continue after a move, and monthly
+  investments the household plans to keep making.
+- Monthly categories named and explained by the person using the dashboard,
+  rather than hard-coded for a particular household.
+- Recurring home obligations that apply to every plan entered once in the
+  home/comparison currency and counted once in each plan.
 - Expandable tiles that show every line item, source status, and subtotal.
 - A strict visual and mathematical hierarchy:
 
   ```text
-  total saving
-  ├─ total investments
-  └─ cash remaining
+  total saved or left each month
+  ├─ monthly investments
+  └─ cash left after costs and planned investments
   ```
 
-- Five-year charts with an explicit selector and legend for gross compensation,
-  net cash, total saving, investments, or cash remaining.
+- Five-year charts with an explicit selector and legend for income before tax
+  and deductions, take-home cash, total saved or left, investments, or cash
+  left after costs and planned investments.
 - Structured, dated research records for tax, immigration, housing, childcare,
   transport, healthcare, weather, careers, and family travel.
 - No arbitrary career, certainty, or lifestyle scores.
 
-## Financial model
+## How monthly savings are calculated
 
-All calculations are monthly and converted to the chosen comparison currency:
+All calculations are monthly and converted to the home/comparison currency:
 
 ```text
 net cash = gross − non-saving deductions − automatic investments
 
-total saving = automatic investments
-             + net cash
-             − living costs
-             − continuing commitments
+total saved or left each month = automatic investments
+                              + net cash
+                              − living costs
+                              − monthly obligations that continue
 
-total investments = automatic investments + planned post-tax investments
-cash remaining = total saving − total investments
+monthly investments = automatic investments + planned post-tax investments
+cash left after costs and planned investments
+  = total saved or left each month − monthly investments
 ```
 
 Investments are savings, not expenses. Incoming External Help / Family Support
@@ -60,10 +82,10 @@ can be recorded as excluded context but never changes a total, chart, or rank.
 See [calculation details](docs/CALCULATIONS.md) and the
 [architecture](docs/ARCHITECTURE.md).
 
-Version 0.1 models recurring monthly steady-state scenarios. Transition dates,
+Version 0.1 models recurring monthly steady-state plans. Transition dates,
 one-time relocation cash flows, and uncertainty ranges are preserved as
 explicit future work in the [product roadmap](docs/ROADMAP.md); until then,
-represent materially different phases as separate scenarios and document the
+represent materially different phases as separate plans and document the
 transition assumptions.
 
 ## Quick start
@@ -90,21 +112,22 @@ launcher checks `WAYFINDER_PORT`, an optional generic `ports.json`, then uses
 the clone-safe fallback `8780`. It binds to loopback and never scans for a
 different port.
 
-### Optional Windows runtime starter comparison
+### Optional Windows starter file
 
-To open one local running instance with an already-validated v4 document:
+To open one local running instance with an already-validated v5 comparison file:
 
 ```bash
 python scripts/dev.py --document path/to/wayfinder-document.json
 ```
 
-This launcher feature is available on Windows only. On macOS and Linux, use the
-browser's **Import complete comparison** flow instead; browser import works on
+This launcher feature is available on Windows only. On macOS and Linux, use
+**Import a saved comparison file** in the browser instead; browser import works on
 every supported platform. `WAYFINDER_DOCUMENT=path/to/wayfinder-document.json` is the equivalent when
 the flag is omitted; `--document` wins when both are present. The launcher
-copies the exact bounded input into an ignored local runtime artifact, validates
-it with the same schema and semantic path as imports, and enables it only for
-that child development process. Production builds and previews ignore seed
+copies the exact bounded input into a per-user Windows Local AppData runtime
+directory (`Wayfinder/runtime-seeds`, outside the repository), validates it
+with the same schema and semantic path as imports, and passes that exact
+directory only to its child development process. Production builds and previews ignore seed
 control variables, so a starter comparison cannot be compiled into public assets.
 A normal `npm run dev`, `npm run build`, `npm start`, or launcher run without a
 document remains empty.
@@ -138,36 +161,37 @@ request `Host` and forwarded-host headers are never used.
 ### Manual setup
 
 1. Choose **Enter my details**.
-2. Select the comparison currency, review the standard fields, and enter every
-   assumption, source, and dynamic value yourself. The clean start has no
-   option or household data. Shared amounts also start blank; type the value or
-   explicitly apply **Use 0** before saving.
-3. Enter the current situation, including gross, deductions, automatic
-   investments, local costs, field evidence, and qualitative assumptions. New
-   option amounts start blank. Type the amount, type `0`, or use the section's
-   explicit **Use 0** action; untouched zeroes cannot be saved as facts.
-4. Add or duplicate alternatives. Expanding a tile reveals the exact split.
-   For every non-comparison-currency option, supply its currency, a positive
-   conversion ratio to the comparison currency, an as-of date, and a source.
-   A missing linked option field or any of those conversion fields rejects the complete
-   option/document rather than creating a partial comparison.
+2. Select the **home/comparison currency** — the currency used for totals and
+   charts — then review the monthly categories. Enter every amount, assumption,
+   and source yourself. A clean start contains no personal data. Amounts entered
+   once for every plan start blank; type a value or explicitly choose **Use 0**.
+3. Enter the current job and home-country household position, including gross
+   pay, tax and other deductions, automatic payroll savings, household costs,
+   continuing obligations, sources, and important non-financial details. Each
+   new amount starts blank. Type a value, type `0`, or use **Use 0**; an
+   untouched zero is not saved as a fact.
+4. Choose **Add another place, job, or plan** or duplicate a saved plan. For each possible
+   plan using another currency, provide its local currency, a positive conversion
+   ratio to the home/comparison currency, the date checked, and where the rate
+   came from. A missing linked amount or conversion detail prevents that plan
+   from appearing in the comparison.
 
-If an older browser-saved migration predates conversion dates, Wayfinder keeps
-that option locally but excludes it from cards, totals, charts, rankings, and
+If an older browser-saved file predates conversion dates, Wayfinder keeps that
+plan locally but excludes it from cards, totals, charts, rankings, and
 family views until the user supplies both a date and a real source. Editable
 exports are also blocked until that repair is complete, because an incomplete
 file would fail strict re-import. New files, agent output, the CLI, and normal
 imports remain strict.
 
-### Agent setup
+### Using an assistant or agent
 
 1. Give the agent [`examples/wayfinder.template.json`](examples/wayfinder.template.json),
-   [`schemas/wayfinder-document.v4.schema.json`](schemas/wayfinder-document.v4.schema.json),
+   [`schemas/wayfinder-document.v5.schema.json`](schemas/wayfinder-document.v5.schema.json),
    and [`docs/AGENT-WORKFLOW.md`](docs/AGENT-WORKFLOW.md).
 2. Give it only user-authorized inputs; ask it to use official/primary sources,
    mark estimates, and fill every standard field with zero only where that is
-   the user's intentional placeholder. The agent must author the same canonical
-   v4 document the browser exports, not a separate agent format. The blank
+   the user's intentional placeholder. The agent must create the same complete
+   v5 comparison file the browser exports, not a separate agent-only format. The blank
    template's 0% growth, 0% inflation, and one-year period are neutral structural
    placeholders, not forecasts; replace them with the user's choices.
 3. Validate the result:
@@ -179,7 +203,7 @@ imports remain strict.
 4. Import it. Wayfinder validates the entire document and shows a summary before
    any existing browser data is replaced.
 
-The browser export and an agent-completed comparison use the same canonical v4
+The browser export and an agent-completed comparison use the same canonical v5
 format. Export, clear, import, and export again must be equal after replacing
 only `updatedAt` with a fixed token and normalizing JSON keys; calculated totals
 and projections are never editable file fields. There is no hidden agent API or
@@ -187,7 +211,7 @@ alternate calculation path.
 
 ## Standard contract files
 
-- [JSON Schema](schemas/wayfinder-document.v4.schema.json)
+- [JSON Schema](schemas/wayfinder-document.v5.schema.json)
 - [Fictional worked example](examples/wayfinder.example.json)
 - [Empty comparison template](examples/wayfinder.template.json)
 - [Agent workflow](docs/AGENT-WORKFLOW.md)
@@ -200,12 +224,12 @@ alternate calculation path.
 - [Asset provenance](docs/ASSETS.md)
 - [Privacy model](PRIVACY.md)
 
-`npm run validate:data -- <document.json>` first checks a v4 document against
-the maintained Draft 2020-12 JSON Schema, then applies semantic rules that are
+`npm run validate:data -- <document.json>` checks a v5 document against the
+maintained Draft 2020-12 JSON Schema, then applies semantic rules that are
 awkward to express in JSON Schema, including field references, scope,
 comparison-currency conversion details, gross reconciliation, and research applicability. Supported
-legacy documents are migrated to v4 before their resulting document is checked
-against the schema. CLI JSON output reports a safe relative path or basename,
+recognized v4 and older documents are migrated to v5 before their resulting
+document is checked again. CLI JSON output reports a safe relative path or basename,
 never an absolute machine path.
 
 The browser and CLI execute a committed static validator generated from the
@@ -217,9 +241,10 @@ byte-for-byte drift check so an outdated generated validator cannot pass CI.
 
 - **Family view:** a self-contained, read-only HTML report with calculations,
   breakdowns, evidence, research, and assumptions.
-- **Editable comparison file:** the complete versioned JSON containing shared
-  settings, the current situation, every alternative, assumptions, evidence,
-  and sources.
+- **Editable comparison file:** the complete versioned JSON containing the
+  explicit current position, possible plans, home/comparison currency and
+  future-estimate assumptions, recurring amounts entered once for every plan,
+  evidence, research, and sources.
 - **Blank comparison template:** an empty JSON file with the standard fields.
 
 These files can contain sensitive financial data. The user chooses when and
@@ -251,7 +276,7 @@ an existing server; set `WAYFINDER_E2E_PORT` when the default isolated test port
 ```text
 app/           document types, validation, math, UI, and family report
 docs/          architecture, calculations, agent and research guidance
-examples/      fictional and blank v4 documents
+examples/      fictional and blank v5 documents
 schemas/       public JSON Schema
 scripts/       portable launcher and document validator
 tests/         calculation, contract, rendering, browser, report, and port tests

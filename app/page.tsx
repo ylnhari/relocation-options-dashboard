@@ -57,6 +57,10 @@ import {
   localToBaseAmount,
   parseMoneyInput,
 } from "./currency-input";
+import {
+  balanceSavingsDisplay,
+  formatMoney,
+} from "./money-display";
 
 type DisplayMode = "base" | "local";
 type StorageNotice = { tone: "warning" | "seed" | "error"; message: string };
@@ -91,6 +95,7 @@ type ValidationLabelContext = {
   fieldDefinitions: Array<Pick<FieldDefinition, "id" | "label">>;
   scenarios?: Array<Pick<Scenario, "label">>;
 };
+type PendingPerOptionAmounts = Record<string, Set<string>>;
 
 const STORAGE_LOCK_NAME = "wayfinder-browser-storage-v4";
 const STORAGE_LOCK_DB_NAME = "wayfinder-coordination";
@@ -105,29 +110,29 @@ const groupMeta: Record<
   { title: string; short: string; help: string }
 > = {
   deduction: {
-    title: "Gross-to-net deductions",
-    short: "Deductions",
-    help: "Tax and other non-saving deductions that reduce take-home cash.",
+    title: "Tax and other deductions",
+    short: "Tax and other deductions",
+    help: "Enter each monthly tax or other non-saving deduction that reduces cash available after gross income. These amounts are not counted as saving.",
   },
   automaticInvestment: {
-    title: "Automatic payroll investments",
-    short: "Automatic investments",
-    help: "Retirement, pension, or similar saving taken from gross pay. These remain savings.",
+    title: "Monthly automatic payroll savings (PF, pension, or similar)",
+    short: "Automatic payroll savings",
+    help: "Enter monthly PF, pension, retirement, or similar saving taken from gross income. These amounts count toward total saved or left each month, not living costs.",
   },
   livingCost: {
     title: "Monthly living costs",
     short: "Living costs",
-    help: "Option-specific costs in that option's local currency.",
+    help: "Enter regular household spending for this place, job, or plan in its own currency. These monthly costs reduce cash left each month.",
   },
   commitment: {
-    title: "Continuing commitments",
-    short: "Commitments",
-    help: "Shared obligations are entered once in the comparison currency and applied to every option.",
+    title: "Monthly obligations that continue",
+    short: "Monthly obligations that continue",
+    help: "Examples include monthly money sent home, loan payments, or insurance. Enter an obligation separately when it changes by plan; enter it once in the home currency only when the same obligation applies identically to every plan, so it counts exactly once.",
   },
   plannedInvestment: {
-    title: "Planned post-tax investments",
-    short: "Planned investments",
-    help: "How take-home cash is allocated to investing. These are part of saving, not an expense.",
+    title: "Monthly investments from after-tax cash",
+    short: "Monthly investments",
+    help: "These monthly amounts come from after-tax cash and count toward total saved or left each month, not living costs. Enter one amount once for every plan in the home currency only when it applies to every plan.",
   },
 };
 
@@ -149,28 +154,28 @@ const projectionMeta: Record<
   { label: string; cumulative: string; explanation: string }
 > = {
   grossBase: {
-    label: "Gross compensation",
-    cumulative: "cumulative gross compensation",
-    explanation: "Before deductions, living costs, commitments, or investments.",
+    label: "Monthly gross income before deductions",
+    cumulative: "cumulative gross income before deductions",
+    explanation: "Before tax, other deductions, living costs, commitments, or saving contributions.",
   },
   netCashBase: {
-    label: "Net cash income",
-    cumulative: "cumulative net cash income",
-    explanation: "Gross compensation after deductions and automatic payroll investments.",
+    label: "Take-home cash",
+    cumulative: "cumulative take-home cash",
+    explanation: "Gross compensation less non-saving deductions and automatic payroll investments.",
   },
   totalSavingBase: {
-    label: "Total saving",
-    cumulative: "cumulative total saving",
-    explanation: "Automatic investments plus cash left after living costs and commitments.",
+    label: "Total saved or left each month",
+    cumulative: "cumulative total saved or left",
+    explanation: "Monthly automatic and planned investments plus cash left after living costs and commitments.",
   },
   totalInvestmentBase: {
-    label: "Total investments",
-    cumulative: "cumulative investments",
-    explanation: "Automatic payroll investments plus planned post-tax investments.",
+    label: "Monthly investments",
+    cumulative: "cumulative monthly investments",
+    explanation: "Automatic payroll saving plus planned investments from after-tax cash.",
   },
   cashRemainingBase: {
-    label: "Cash remaining",
-    cumulative: "cumulative cash remaining",
+    label: "Cash left each month",
+    cumulative: "cumulative cash left",
     explanation: "Cash left after living costs, commitments, and planned investments.",
   },
 };
@@ -491,26 +496,26 @@ function friendlyValidationIssue(
     [".fx.rateToBase", "Conversion ratio"],
     [".fx.asOf", "Conversion date"],
     [".fx.source", "Conversion source"],
-    [".grossMonthly", "Monthly gross compensation"],
-    [".currency", "Option currency"],
-    [".employment", "Income summary"],
-    [".location", "Location"],
+    [".grossMonthly", "Monthly gross income before tax and deductions"],
+    [".currency", "Currency used in this place, job, or plan"],
+    [".employment", "Who earns income in this plan"],
+    [".location", "Place or location"],
     [".label", "Name or label"],
-    [".status", "Status"],
-    [".flag", "Country code or badge"],
-    [".earners", "Household earners"],
-    [".spouseJob", "Spouse income assumption"],
-    [".childcare", "Childcare assumption"],
-    [".transport", "Transport assumption"],
-    [".residency", "Residence or visa assumption"],
-    [".bonus", "Bonus treatment"],
-    [".benefits", "Benefits"],
-    [".risks", "Important uncertainties"],
+    [".status", "Plan stage"],
+    [".flag", "Flag country code"],
+    [".earners", "Number of earners counted in this plan"],
+    [".spouseJob", "Partner income included in this plan"],
+    [".childcare", "Childcare arrangement and monthly cost included"],
+    [".transport", "Transport choice and monthly cost included"],
+    [".residency", "Residence or visa condition"],
+    [".bonus", "Bonus or one-time payment treatment"],
+    [".benefits", "Benefits included in this plan"],
+    [".risks", "Important details still to verify"],
     [".sourceUrl", "Source link"],
     [".sourceTitle", "Source title"],
     [".publisher", "Publisher"],
     [".finding", "Finding"],
-    ["$.baseCurrency", "Comparison currency"],
+    ["$.baseCurrency", "Home currency for all charts and totals"],
     ["$.locale", "Number format"],
     ["$.title", "Comparison title"],
     ["$.projectionAssumptions.incomeGrowthPct", "Annual income growth"],
@@ -558,32 +563,29 @@ function validationLabelContext(value: unknown): ValidationLabelContext {
   return { fieldDefinitions, scenarios };
 }
 
-function numberFormatter(locale: string, compact = false) {
-  try {
-    return new Intl.NumberFormat(locale || "en-US", {
-      maximumFractionDigits: compact ? 1 : 0,
-      notation: compact ? "compact" : "standard",
-    });
-  } catch {
-    return new Intl.NumberFormat("en-US", {
-      maximumFractionDigits: compact ? 1 : 0,
-      notation: compact ? "compact" : "standard",
-    });
-  }
-}
-
-function formatMoney(
-  value: number,
-  currency: string,
-  locale: string,
-  compact = false,
-) {
-  const sign = value < 0 ? "−" : "";
-  return `${sign}${currency} ${numberFormatter(locale, compact).format(Math.abs(value))}`;
-}
-
 function formatPercent(value: number) {
   return `${value.toFixed(1)}%`;
+}
+
+function balancedScenarioSavings(
+  scenario: DerivedScenario,
+  document: WayfinderDocument,
+) {
+  const localInvestments = scenario.fx.rateToBase > 0
+    ? scenario.totalInvestmentBase / scenario.fx.rateToBase
+    : 0;
+  return {
+    local: balanceSavingsDisplay(
+      scenario.totalSavingMonthly,
+      localInvestments,
+      scenario.currency,
+    ),
+    base: balanceSavingsDisplay(
+      scenario.totalSavingBase,
+      scenario.totalInvestmentBase,
+      document.baseCurrency,
+    ),
+  };
 }
 
 function EditorSection({
@@ -718,7 +720,7 @@ function CurrencyAmountEditor({
       </div>
       <div className={`currency-input-pair ${sameCurrency ? "same-currency" : ""}`}>
         <label>
-          <span>{sameCurrency ? "Option and comparison currency" : "Option currency"} <b>{localCurrency}</b></span>
+          <span>{sameCurrency ? "Home currency for all charts and totals" : "Currency used in this place, job, or plan"} <b>{localCurrency}</b></span>
           <input
             aria-describedby={descriptionId}
             aria-label={`${label} in ${localCurrency}`}
@@ -736,7 +738,7 @@ function CurrencyAmountEditor({
           <>
             <span className="currency-link" aria-hidden="true">=</span>
             <label>
-              <span>Comparison currency <b>{baseCurrency}</b></span>
+              <span>Home currency for all charts and totals <b>{baseCurrency}</b></span>
               <input
                 aria-describedby={descriptionId}
                 aria-label={`${label} in ${baseCurrency}`}
@@ -756,10 +758,10 @@ function CurrencyAmountEditor({
       </div>
       <small className="currency-conversion-note" id={descriptionId}>
         {sameCurrency
-          ? `This option and the comparison both use ${baseCurrency}.`
+          ? `This place, job, or plan and every chart and total use the ${baseCurrency} home currency.`
           : usableRate
             ? `Edit either amount. Linked using 1 ${localCurrency} = ${formatEditableAmount(rateToBase)} ${baseCurrency}.`
-            : `Enter a positive conversion ratio above to calculate ${baseCurrency}.`}
+            : `Enter a positive conversion ratio above to calculate the amount in ${baseCurrency}, the home currency that anchors all charts and totals.`}
       </small>
       {!sameCurrency && usableRate && (
         <span className="sr-only" aria-live="polite" aria-atomic="true">
@@ -823,7 +825,7 @@ function EvidenceBadge({ evidence }: { evidence: InputEvidence }) {
 function EvidenceEditor({
   evidence,
   onChange,
-  title = "Accuracy and source",
+  title = "How reliable is this number?",
 }: {
   evidence: InputEvidence;
   onChange: (next: InputEvidence) => void;
@@ -837,7 +839,7 @@ function EvidenceEditor({
       </summary>
       <div className="source-grid">
         <label>
-          <span>Status</span>
+          <span>Confidence</span>
           <select
             value={evidence.status}
             onChange={(event) =>
@@ -847,13 +849,13 @@ function EvidenceEditor({
               })
             }
           >
-            <option value="unknown">Needs source</option>
-            <option value="estimate">Estimate</option>
+            <option value="unknown">I still need a source</option>
+            <option value="estimate">Estimated</option>
             <option value="confirmed">Confirmed</option>
           </select>
         </label>
         <label>
-          <span>As of{sourceRequired ? " · required" : ""}</span>
+          <span>Date checked{sourceRequired ? " · required" : ""}</span>
           <input
             type="date"
             required={sourceRequired}
@@ -864,7 +866,7 @@ function EvidenceEditor({
           />
         </label>
         <label className="wide">
-          <span>Source{sourceRequired ? " · required" : ""}</span>
+          <span>Where this figure came from{sourceRequired ? " · required" : ""}</span>
           <input
             required={sourceRequired}
             maxLength={1000}
@@ -876,7 +878,7 @@ function EvidenceEditor({
           />
         </label>
         <label className="wide">
-          <span>Note</span>
+          <span>What this source means</span>
           <input
             maxLength={1000}
             value={evidence.note}
@@ -896,11 +898,13 @@ function BreakdownGroup({
   items,
   scenario,
   document,
+  mode,
 }: {
   title: string;
   items: BreakdownItem[];
   scenario: Scenario;
   document: WayfinderDocument;
+  mode: DisplayMode;
 }) {
   return (
     <section className="breakdown-group">
@@ -915,16 +919,16 @@ function BreakdownGroup({
             <div className="breakdown-line" key={item.id}>
               <span>
                 {item.label}
-                {item.scope === "shared" && <small>Shared across all options</small>}
+                {item.scope === "shared" && <small>Entered once for every plan</small>}
               </span>
               <span>
-                <strong>
-                  {formatMoney(
-                    item.scope === "shared" ? item.baseAmount : item.localAmount,
-                    item.scope === "shared" ? document.baseCurrency : scenario.currency,
-                    document.locale,
-                  )}
-                </strong>
+                <MoneyValue
+                  local={item.localAmount}
+                  base={item.baseAmount}
+                  scenario={scenario}
+                  document={document}
+                  mode={mode}
+                />
                 {evidence && <EvidenceBadge evidence={evidence} />}
               </span>
             </div>
@@ -960,6 +964,7 @@ export default function Home() {
   const [clearConfirm, setClearConfirm] = useState(false);
   const [currencyRestartDraft, setCurrencyRestartDraft] = useState<WayfinderDocument | null>(null);
   const [deleteScenarioConfirm, setDeleteScenarioConfirm] = useState(false);
+  const [deleteCurrentReplacementId, setDeleteCurrentReplacementId] = useState<string | null>(null);
   const [deleteFieldConfirm, setDeleteFieldConfirm] = useState<string | null>(null);
   const [importCandidate, setImportCandidate] = useState<{
     document: WayfinderDocument;
@@ -978,6 +983,7 @@ export default function Home() {
   const [earnersInputDraft, setEarnersInputDraft] = useState<string | null>(null);
   const [enteredScenarioAmounts, setEnteredScenarioAmounts] = useState<Set<string>>(new Set());
   const [enteredSharedAmounts, setEnteredSharedAmounts] = useState<Set<string>>(new Set());
+  const [pendingPerOptionAmounts, setPendingPerOptionAmounts] = useState<PendingPerOptionAmounts>({});
   const [enteredSupportAmounts, setEnteredSupportAmounts] = useState<Set<string>>(new Set());
   const [toast, setToast] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -1045,6 +1051,12 @@ export default function Home() {
     setCurrencyRestartDraft(null);
   }, [currencyRestartDraft]);
 
+  const closeModelEditor = useCallback(() => {
+    setModelDraft(null);
+    setDeleteFieldConfirm(null);
+    setPendingPerOptionAmounts({});
+  }, []);
+
   useEffect(() => {
     if (!activeDialogId) return;
     if (!dialogCycleRef.current) {
@@ -1111,10 +1123,10 @@ export default function Home() {
       if (activeDialogId === "scenario-editor") {
         setEditor(null);
         setDeleteScenarioConfirm(false);
+        setDeleteCurrentReplacementId(null);
       }
       if (activeDialogId === "comparison-model") {
-        setModelDraft(null);
-        setDeleteFieldConfirm(null);
+        closeModelEditor();
       }
       if (activeDialogId === "share") setShareOpen(false);
     };
@@ -1126,7 +1138,7 @@ export default function Home() {
         element.inert = wasInert;
       });
     };
-  }, [activeDialogId, cancelClearDashboard]);
+  }, [activeDialogId, cancelClearDashboard, closeModelEditor]);
 
   useEffect(() => {
     if (activeDialogId || !dialogCycleRef.current) return;
@@ -1208,10 +1220,20 @@ export default function Home() {
   const editorPreview = editor && editorConversionReady && editorAmountsReady
     ? deriveScenario(plan, editor)
     : null;
+  const editorPreviewSavings = editorPreview
+    ? balancedScenarioSavings(editorPreview, plan)
+    : null;
   const editingExisting = Boolean(
     editor && plan.scenarios.some((scenario) => scenario.id === editor.id),
   );
   const firstScenarioSetup = Boolean(editor && plan.scenarios.length === 0);
+  const editingCurrentScenario = Boolean(
+    editor && editingExisting && editor.id === plan.currentScenarioId,
+  );
+  const editorRepresentsCurrentPosition = firstScenarioSetup || editingCurrentScenario;
+  const currentReplacementScenarios = editingCurrentScenario
+    ? plan.scenarios.filter((scenario) => scenario.id !== editor?.id)
+    : [];
   const optionCurrencyLocked = Boolean(
     editor && (
       editingExisting ||
@@ -1309,7 +1331,12 @@ export default function Home() {
       setStorageNotice({ tone: "warning", message: snapshot.recoveryMessage });
     }
     if (snapshot.migrated) {
-      setToast("Older browser data was preserved and migrated. Review the migration notes.");
+      const requiresConversionRepair = snapshot.document.scenarios.some((scenario) =>
+        isLegacyUndatedConversion(snapshot.document, scenario),
+      );
+      setToast(requiresConversionRepair
+        ? "Older browser data was preserved. Use the older saved plans conversion-details panel to complete missing conversion dates or sources."
+        : "An earlier dashboard was updated. Its first saved plan remains your current job and home-country position; review or change it in Home currency, future estimates, and amounts used in every plan.");
     }
   };
 
@@ -1468,6 +1495,7 @@ export default function Home() {
             .filter((field) => field.scope === "shared")
             .map((field) => field.id),
     ));
+    setPendingPerOptionAmounts({});
     setEnteredSupportAmounts(new Set(
       freshStart ? [] : plan.excludedSupport.map((item) => item.id),
     ));
@@ -1479,6 +1507,8 @@ export default function Home() {
     setFormIssues([]);
     setEarnersInputDraft("");
     setEnteredScenarioAmounts(new Set());
+    setDeleteScenarioConfirm(false);
+    setDeleteCurrentReplacementId(null);
     setEditor(createBlankScenario(plan));
   };
 
@@ -1494,18 +1524,24 @@ export default function Home() {
     event.preventDefault();
     if (!editor) return;
     if (earnersInputDraft === null || earnersInputDraft.trim().length === 0) {
-      setFormNotice("This option has not been added. Enter the number of household earners included.");
+      setFormNotice("This place, job, or plan has not been added. Enter the number of earners counted in its monthly income.");
       setFormIssues([]);
       return;
     }
     if (!editorConversionReady) {
-      setFormNotice("This option has not been added. Complete its currency and conversion details first.");
+      setFormNotice("This place, job, or plan has not been added. Complete its currency and conversion details first.");
+      setFormIssues([]);
+      return;
+    }
+    if (!editorAmountsReady) {
+      setFormNotice("This place, job, or plan has not been added. Enter monthly gross income before tax and deductions, then enter or explicitly use 0 for every monthly item.");
       setFormIssues([]);
       return;
     }
     const savedEditor = { ...editor, earners: Number(earnersInputDraft) };
     const next: WayfinderDocument = {
       ...plan,
+      currentScenarioId: firstScenarioSetup ? savedEditor.id : plan.currentScenarioId,
       scenarios: editingExisting
         ? plan.scenarios.map((scenario) =>
             scenario.id === savedEditor.id ? savedEditor : scenario,
@@ -1516,11 +1552,11 @@ export default function Home() {
       allowLegacyConversionGap: legacyRepairScenarios.length > 0,
     });
     if (!preflight.ok) {
-      setFormNotice("This option has not been added. Fix the highlighted information first.");
+      setFormNotice("This place, job, or plan has not been added. Fix the highlighted information first.");
       setFormIssues(preflight.issues);
       return;
     }
-    if (!await commitPlan(next, firstScenarioSetup ? "Current situation saved in this browser" : "Option saved in this browser")) {
+    if (!await commitPlan(next, firstScenarioSetup ? "Your current place, job, or plan was saved in this browser" : "Place, job, or plan saved in this browser")) {
       return;
     }
     setActiveIds((current) =>
@@ -1528,6 +1564,7 @@ export default function Home() {
     );
     setEditor(null);
     setDeleteScenarioConfirm(false);
+    setDeleteCurrentReplacementId(null);
   };
 
   const openScenarioEditor = (id: string) => {
@@ -1548,6 +1585,7 @@ export default function Home() {
     setFormNotice("");
     setFormIssues([]);
     setDeleteScenarioConfirm(false);
+    setDeleteCurrentReplacementId(null);
   };
 
   const duplicateScenario = (id: string) => {
@@ -1568,14 +1606,33 @@ export default function Home() {
     ]));
     setFormNotice("");
     setFormIssues([]);
+    setDeleteScenarioConfirm(false);
+    setDeleteCurrentReplacementId(null);
   };
 
   const deleteScenario = async () => {
     if (!editor) return;
     const deletedEditor = editor;
+    const remainingScenarios = plan.scenarios.filter((scenario) => scenario.id !== deletedEditor.id);
+    const deletingCurrentScenario = deletedEditor.id === plan.currentScenarioId;
+    if (
+      deletingCurrentScenario &&
+      remainingScenarios.length > 0 &&
+      !remainingScenarios.some((scenario) => scenario.id === deleteCurrentReplacementId)
+    ) {
+      setFormNotice("Choose the saved plan that will become your current job and home-country household position before removing this one.");
+      setFormIssues([]);
+      return;
+    }
+    const replacement = remainingScenarios.find(
+      (scenario) => scenario.id === deleteCurrentReplacementId,
+    );
     const next = {
       ...plan,
-      scenarios: plan.scenarios.filter((scenario) => scenario.id !== deletedEditor.id),
+      currentScenarioId: deletingCurrentScenario
+        ? replacement?.id ?? null
+        : plan.currentScenarioId,
+      scenarios: remainingScenarios,
       researchItems: plan.researchItems.map((item) => ({
         ...item,
         appliesToScenarioIds: item.appliesToScenarioIds.filter(
@@ -1583,10 +1640,16 @@ export default function Home() {
         ),
       })),
     };
-    if (!await commitPlan(next, "Option removed from this browser")) return;
+    if (!await commitPlan(
+      next,
+      deletingCurrentScenario && replacement
+        ? `${deletedEditor.label || "Current plan"} was removed. ${replacement.label || "The selected plan"} is now your current job and home-country household position.`
+        : "Place, job, or plan removed from this browser",
+    )) return;
     setActiveIds((current) => current.filter((id) => id !== deletedEditor.id));
     setEditor(null);
     setDeleteScenarioConfirm(false);
+    setDeleteCurrentReplacementId(null);
   };
 
   const clearDashboard = async () => {
@@ -1688,7 +1751,7 @@ export default function Home() {
 
   const exportDocument = () => {
     if (legacyRepairScenarios.length > 0) {
-      notify("Complete the older conversion details before downloading an editable comparison file");
+      notify("Complete the older conversion details before downloading a saved comparison file");
       return;
     }
     const exported = withFreshTimestamp(plan);
@@ -1698,7 +1761,7 @@ export default function Home() {
       "application/json",
     );
     setShareOpen(false);
-    notify("Editable comparison file downloaded");
+    notify("Saved comparison file downloaded");
   };
 
   const exportClearBackup = () => {
@@ -1714,19 +1777,19 @@ export default function Home() {
       JSON.stringify(exported, null, 2),
       "application/json",
     );
-    notify(currencyRestartDraft ? "Shared settings draft downloaded" : "Editable comparison file downloaded");
+    notify(currencyRestartDraft ? "Home-currency and every-plan-amounts draft downloaded" : "Saved comparison file downloaded");
   };
 
   const downloadAgentTemplate = () => {
     const template = createWayfinderDocument(plan.baseCurrency);
     template.title = "Replace with a clear comparison title";
     downloadText(
-      "wayfinder-comparison-template.v4.json",
+      "wayfinder-comparison-template.v5.json",
       JSON.stringify(template, null, 2),
       "application/json",
     );
     setShareOpen(false);
-    notify("Blank comparison template downloaded");
+    notify("Empty comparison file downloaded");
   };
 
   const downloadFamilyView = () => {
@@ -1908,6 +1971,48 @@ export default function Home() {
     });
   };
 
+  const updatePendingPerOptionAmount = (
+    fieldId: string,
+    scenarioId: string,
+    amount: number | null,
+  ) => {
+    setPendingPerOptionAmounts((current) => {
+      const remaining = new Set(current[fieldId] ?? []);
+      if (amount === null) remaining.add(scenarioId);
+      else remaining.delete(scenarioId);
+      if (remaining.size === 0) {
+        const next = { ...current };
+        delete next[fieldId];
+        return next;
+      }
+      return { ...current, [fieldId]: remaining };
+    });
+    setModelDraft((current) => current
+      ? {
+          ...current,
+          scenarios: current.scenarios.map((scenario) => scenario.id === scenarioId
+            ? { ...scenario, values: { ...scenario.values, [fieldId]: amount ?? 0 } }
+            : scenario),
+        }
+      : current);
+  };
+
+  const markPendingPerOptionAmountsAsZero = (
+    fieldIds: string[],
+    scenarioId: string,
+  ) => {
+    setPendingPerOptionAmounts((current) => {
+      const next: PendingPerOptionAmounts = { ...current };
+      fieldIds.forEach((fieldId) => {
+        const remaining = new Set(next[fieldId] ?? []);
+        remaining.delete(scenarioId);
+        if (remaining.size === 0) delete next[fieldId];
+        else next[fieldId] = remaining;
+      });
+      return next;
+    });
+  };
+
   const updateSupportAmount = (itemId: string, value: string) => {
     setEnteredSupportAmounts((current) => {
       const next = new Set(current);
@@ -1928,11 +2033,20 @@ export default function Home() {
   const saveModel = async (event: FormEvent) => {
     event.preventDefault();
     if (!modelDraft) return;
+    const pendingAmountCount = modelDraft.fieldDefinitions.reduce(
+      (total, field) => total + (pendingPerOptionAmounts[field.id]?.size ?? 0),
+      0,
+    );
+    if (pendingAmountCount > 0) {
+      setFormNotice(`Home currency, future estimates, and amounts used in every plan have not been saved. Enter or explicitly use 0 for ${pendingAmountCount} pending monthly plan ${pendingAmountCount === 1 ? "amount" : "amounts"}.`);
+      setFormIssues([]);
+      return;
+    }
     if (
       !projectionInputDraft ||
       Object.values(projectionInputDraft).some((value) => value.trim().length === 0)
     ) {
-      setFormNotice("Shared settings have not been saved. Enter every forecast setting.");
+      setFormNotice("Home currency, future estimates, and amounts used in every plan have not been saved. Enter every forecast setting.");
       setFormIssues([]);
       return;
     }
@@ -1946,13 +2060,14 @@ export default function Home() {
     });
     const preflight = validateWayfinderInput(savedModel);
     if (!preflight.ok) {
-      setFormNotice("Shared settings have not been saved. Fix the information below first.");
+      setFormNotice("Home currency, future estimates, and amounts used in every plan have not been saved. Fix the information below first.");
       setFormIssues(preflight.issues);
       return;
     }
-    if (!await commitPlan(savedModel, "Shared settings applied to every option")) return;
+    if (!await commitPlan(savedModel, "Home currency, future estimates, and amounts used in every plan applied")) return;
     setModelDraft(null);
     setDeleteFieldConfirm(null);
+    setPendingPerOptionAmounts({});
     if (!plan.scenarios.length) {
       setFormNotice("");
       setFormIssues([]);
@@ -2007,6 +2122,19 @@ export default function Home() {
         next.delete(id);
         return next;
       });
+      if (scope !== "perOption") {
+        setPendingPerOptionAmounts((current) => {
+          const next = { ...current };
+          delete next[id];
+          return next;
+        });
+      }
+      if (scope === "perOption" && modelDraft.scenarios.length > 0) {
+        setPendingPerOptionAmounts((current) => ({
+          ...current,
+          [id]: new Set(modelDraft.scenarios.map((scenario) => scenario.id)),
+        }));
+      }
     }
     setFormNotice("");
     setFormIssues([]);
@@ -2019,9 +2147,16 @@ export default function Home() {
   };
 
   const addModelField = (group: FieldGroup, scope: FieldScope) => {
+    if (!modelDraft) return;
+    const id = createStableId(group.toLowerCase());
+    if (scope === "perOption" && modelDraft.scenarios.length > 0) {
+      setPendingPerOptionAmounts((current) => ({
+        ...current,
+        [id]: new Set(modelDraft.scenarios.map((scenario) => scenario.id)),
+      }));
+    }
     setModelDraft((current) => {
       if (!current) return current;
-      const id = createStableId(group.toLowerCase());
       return syncDocumentFields({
         ...current,
         fieldDefinitions: [
@@ -2065,6 +2200,11 @@ export default function Home() {
       next.delete(id);
       return next;
     });
+    setPendingPerOptionAmounts((current) => {
+      const next = { ...current };
+      delete next[id];
+      return next;
+    });
     setDeleteFieldConfirm(null);
   };
 
@@ -2082,17 +2222,17 @@ export default function Home() {
       <header className="topbar">
         <a className="brand" href="#top" aria-label="Wayfinder home">
           <span className="brand-mark" aria-hidden="true"><i /><i /><i /></span>
-          <span><strong>Wayfinder</strong><small>Relocation decision studio</small></span>
+          <span><strong>Wayfinder</strong><small>Compare monthly relocation plans</small></span>
         </a>
         <div className="topbar-actions">
           {plan.scenarios.length > 0 && (
-            <div className="segmented" aria-label="Display currency">
-              <button type="button" aria-pressed={mode === "base"} className={mode === "base" ? "active" : ""} onClick={() => setMode("base")}>{plan.baseCurrency} view</button>
-              <button type="button" aria-pressed={mode === "local"} className={mode === "local" ? "active" : ""} onClick={() => setMode("local")}>Local view</button>
+            <div className="segmented" aria-label="How to display every amount">
+              <button type="button" aria-pressed={mode === "base"} className={mode === "base" ? "active" : ""} onClick={() => setMode("base")}>All amounts in {plan.baseCurrency}</button>
+              <button type="button" aria-pressed={mode === "local"} className={mode === "local" ? "active" : ""} onClick={() => setMode("local")}>Each plan’s own currency</button>
             </div>
           )}
-          <button className="button ghost" onClick={openManualSetup}>Shared settings</button>
-          {plan.scenarios.length > 0 && <button className="button ghost share-button" onClick={() => setShareOpen(true)}>Share</button>}
+          <button className="button ghost" onClick={openManualSetup}>Home currency, future estimates, and amounts used in every plan</button>
+          {plan.scenarios.length > 0 && <button className="button ghost share-button" onClick={() => setShareOpen(true)}>Download or import</button>}
           <button
             className="button primary"
             onClick={() =>
@@ -2101,7 +2241,7 @@ export default function Home() {
                 : openManualSetup()
             }
           >
-            <span aria-hidden="true">＋</span> {plan.scenarios.length ? "Add option" : "Enter my details"}
+            <span aria-hidden="true">＋</span> {plan.scenarios.length ? "Add another place, job, or plan" : "Enter my details"}
           </button>
         </div>
       </header>
@@ -2126,63 +2266,63 @@ export default function Home() {
           <div className="welcome-copy">
             <div className="eyebrow"><span className="pulse-dot" /> Open source · private on your device</div>
             <h1>Enter your numbers. Compare <em>every move.</em></h1>
-            <p>Enter details manually or import one JSON file containing shared settings, your current situation, all alternatives, assumptions, and sources.</p>
+            <p>Enter details manually or import one JSON file containing your home currency, future estimates, amounts used in every plan, current position, alternatives, assumptions, and sources.</p>
             <div className="welcome-actions">
               <button className="button primary large" onClick={openManualSetup}>Enter my details</button>
-              <button className="button ghost large" onClick={() => fileInputRef.current?.click()}>Import complete comparison</button>
-              <button className="button ghost large" onClick={downloadAgentTemplate}>Download blank comparison template</button>
+              <button className="button ghost large" onClick={() => fileInputRef.current?.click()}>Import a saved comparison file</button>
+              <button className="button ghost large" onClick={downloadAgentTemplate}>Download an empty comparison file</button>
             </div>
             <p className="privacy-note">No sign-in, cloud database, or telemetry. Your figures stay in this browser unless you deliberately download a file.</p>
           </div>
           <div className="welcome-steps" aria-label="How Wayfinder works">
-            <article><b>01</b><div><strong>Shared settings</strong><span>Choose comparison currency, growth assumptions, and common costs/investments once.</span></div></article>
-            <article><b>02</b><div><strong>Add your options</strong><span>Enter the current situation and each country, city, or job offer.</span></div></article>
-            <article><b>03</b><div><strong>Review the comparison</strong><span>See salary, deductions, costs, investments, cash left, assumptions, and sources.</span></div></article>
+            <article><b>01</b><div><strong>Home currency, future estimates, and amounts used in every plan</strong><span>Choose the home currency that anchors every chart and total, future-estimate assumptions, and any monthly amount entered once for every plan.</span></div></article>
+            <article><b>02</b><div><strong>Add each place, job, or plan</strong><span>Start with your current job and home-country household position, then add each possible move, job, or household plan.</span></div></article>
+            <article><b>03</b><div><strong>Review monthly saving and assumptions</strong><span>See gross income, deductions, costs, investments, cash left, assumptions, and sources.</span></div></article>
           </div>
         </section>
       ) : (
         <>
           <section className="hero" id="top">
             <div className="hero-copy">
-              <div className="eyebrow"><span className="pulse-dot" /> {visible.length} active {visible.length === 1 ? "option" : "options"} · amounts in {plan.baseCurrency}</div>
-              <h1>See whether the next move <em>actually compounds.</em></h1>
-              <p>Compare every option using the same income, costs, and savings assumptions.</p>
+              <div className="eyebrow"><span className="pulse-dot" /> {visible.length} included {visible.length === 1 ? "place, job, or plan" : "places, jobs, or plans"} · charts and totals in {plan.baseCurrency}</div>
+              <h1>Compare monthly income, costs, and money left for each move.</h1>
+              <p>Compare every place, job, or plan using the same monthly calculation and the currency used in charts and totals.</p>
               <div className="model-chips">
-                <span>{formatMoney(sharedCommitmentTotal, plan.baseCurrency, plan.locale)} monthly commitments used in every option</span>
-                <span>{formatMoney(sharedInvestmentTotal, plan.baseCurrency, plan.locale)} monthly investment target used in every option</span>
+                <span>{formatMoney(sharedCommitmentTotal, plan.baseCurrency, plan.locale)} monthly obligations entered once for every plan</span>
+                <span>{formatMoney(sharedInvestmentTotal, plan.baseCurrency, plan.locale)} monthly investments entered once for every plan</span>
               </div>
             </div>
             <button className="model-summary-card" onClick={openManualSetup}>
-              <span>Used in every option</span>
-              <strong>Shared settings</strong>
-              <small>Set shared costs, investments, growth, and sources.</small>
+              <span>Applies to every place, job, or plan</span>
+              <strong>Home currency, future estimates, and amounts used in every plan</strong>
+              <small>Set the home currency that anchors every chart and total, forecast assumptions, and monthly amounts entered once for every plan.</small>
               <b>Open settings →</b>
             </button>
           </section>
 
           {visible.length === 0 && derived.length > 0 && (
             <section className="empty-selection panel">
-              <h2>No active options</h2>
-              <p>Select at least one option below to populate comparisons and projections.</p>
+              <h2>No places, jobs, or plans are included</h2>
+              <p>Select at least one place, job, or plan below to populate the comparison and future estimate.</p>
             </section>
           )}
 
           {visible.length > 0 && (
             <section className="kpi-grid" aria-label="Financial highlights">
               <article className="kpi-card glow-blue">
-                <span className="kpi-label">Highest monthly total saving</span>
+                <span className="kpi-label">Highest total saved or left each month</span>
                 <strong>{formatMoney(bestSaving?.totalSavingBase ?? 0, plan.baseCurrency, plan.locale, true)}</strong>
                 <p>{bestSaving?.label}</p>
                 <i style={{ width: `${Math.max(8, (bestSaving?.totalSavingBase ?? 0) / maxSaving * 100)}%` }} />
               </article>
               <article className="kpi-card glow-coral">
-                <span className="kpi-label">Strongest one-income option</span>
+                <span className="kpi-label">Highest total saved or left among one-earner plans</span>
                 <strong>{bestOneIncome ? formatMoney(bestOneIncome.totalSavingBase, plan.baseCurrency, plan.locale, true) : "—"}</strong>
-                <p>{bestOneIncome?.label ?? "No one-income option active"}</p>
+                <p>{bestOneIncome?.label ?? "No one-earner place, job, or plan is included"}</p>
                 <i style={{ width: `${Math.max(8, (bestOneIncome?.totalSavingBase ?? 0) / maxSaving * 100)}%` }} />
               </article>
               <article className="kpi-card glow-gold">
-                <span className="kpi-label">Highest cash remaining</span>
+                <span className="kpi-label">Highest cash left each month</span>
                 <strong>{formatMoney(bestCash?.cashRemainingBase ?? 0, plan.baseCurrency, plan.locale, true)}</strong>
                 <p>{bestCash?.label}</p>
                 <i style={{ width: `${Math.max(8, (bestCash?.cashRemainingBase ?? 0) / maxCash * 100)}%` }} />
@@ -2192,20 +2332,20 @@ export default function Home() {
 
           <section className="section-block scenarios-section">
             <div className="section-heading">
-              <div><span className="section-kicker">01 · Your options</span><h2>See income, costs, and monthly saving</h2></div>
-              <p>Open any option to see exactly where the money goes.</p>
+              <div><span className="section-kicker">01 · Your places, jobs, and plans</span><h2>See monthly income, costs, and money left</h2></div>
+              <p>Open any place, job, or plan to see exactly where the monthly amounts go.</p>
             </div>
             {legacyRepairScenarios.length > 0 && (
               <div className="legacy-repair-panel" role="status">
-                <div><strong>Older options need a conversion date</strong><p>These saved options are kept safely but excluded from cards, totals, charts, and rankings until their conversion details are completed.</p></div>
+                <div><strong>Older saved plans need a conversion date</strong><p>These saved places, jobs, or plans are kept safely but excluded from cards, totals, charts, and rankings until their currency conversion details are completed.</p></div>
                 {legacyRepairScenarios.map((scenario) => (
                   <button key={scenario.id} type="button" className="button ghost" onClick={() => openScenarioEditor(scenario.id)}>
-                    Complete {scenario.label || "older option"}
+                    Complete {scenario.label || "older saved plan"}
                   </button>
                 ))}
               </div>
             )}
-            <div className="scenario-selector" aria-label="Options included in comparisons">
+            <div className="scenario-selector" aria-label="Places, jobs, and plans included in charts and totals">
               {derived.map((scenario) => (
                 <label key={scenario.id}>
                   <input type="checkbox" checked={activeIds.includes(scenario.id)} onChange={() => toggleActive(scenario.id)} />
@@ -2214,79 +2354,83 @@ export default function Home() {
               ))}
             </div>
             <div className="scenario-grid">
-              {derived.map((scenario) => (
+              {derived.map((scenario) => {
+                const displayedSavings = balancedScenarioSavings(scenario, plan);
+                return (
                 <article className={`scenario-card ${activeIds.includes(scenario.id) ? "active" : "inactive"}`} key={scenario.id} style={{ "--accent": scenario.color } as CSSProperties}>
                   <div className="scenario-topline">
                     <span className="flag-badge">{flagGlyph(scenario.flag)}</span>
                     <span className="status-pill">{scenario.status}</span>
-                    <button type="button" aria-pressed={activeIds.includes(scenario.id)} className={`scenario-toggle ${activeIds.includes(scenario.id) ? "on" : ""}`} onClick={() => toggleActive(scenario.id)} aria-label={`${activeIds.includes(scenario.id) ? "Exclude" : "Include"} ${scenario.label} in comparisons`}><i /></button>
+                    <button type="button" aria-pressed={activeIds.includes(scenario.id)} className={`scenario-toggle ${activeIds.includes(scenario.id) ? "on" : ""}`} onClick={() => toggleActive(scenario.id)} aria-label={`${activeIds.includes(scenario.id) ? "Exclude" : "Include"} ${scenario.label} in charts and totals`}><i /></button>
                   </div>
                   <h3>{scenario.label}</h3>
                   <p className="scenario-location">{scenario.location}</p>
                   <p className="scenario-employment">{scenario.employment}</p>
 
                   <div className="gross-banner">
-                    <span>Monthly gross compensation</span>
+                    <small>{scenario.id === plan.currentScenarioId ? "Current job and home-country household position" : "Possible job, move, or household plan"}</small>
+                    <span>Monthly gross income before deductions</span>
                     <MoneyValue local={scenario.grossMonthly} base={scenario.grossBase} scenario={scenario} document={plan} mode={mode} />
                     <EvidenceBadge evidence={scenario.evidence.grossMonthly ?? createUnknownEvidence()} />
                   </div>
 
                   <dl className="tile-calculation">
-                    <div><dt>Non-saving deductions</dt><dd><MoneyValue local={scenario.deductionMonthly} base={scenario.deductionBase} scenario={scenario} document={plan} mode={mode} /></dd></div>
-                    <div><dt>Net cash income</dt><dd><MoneyValue local={scenario.netCashMonthly} base={scenario.netCashBase} scenario={scenario} document={plan} mode={mode} /></dd></div>
+                    <div><dt>Tax and other deductions{scenario.grossMonthly > 0 && <small>Effective: {formatPercent(scenario.deductionMonthly / scenario.grossMonthly * 100)} of monthly gross income</small>}</dt><dd><MoneyValue local={scenario.deductionMonthly} base={scenario.deductionBase} scenario={scenario} document={plan} mode={mode} /></dd></div>
+                    <div><dt>Take-home cash</dt><dd><MoneyValue local={scenario.netCashMonthly} base={scenario.netCashBase} scenario={scenario} document={plan} mode={mode} /></dd></div>
                     <div><dt>Living costs</dt><dd><MoneyValue local={scenario.livingMonthly} base={scenario.livingBase} scenario={scenario} document={plan} mode={mode} /></dd></div>
-                    <div><dt>Continuing commitments</dt><dd><MoneyValue local={scenario.commitmentBase / scenario.fx.rateToBase} base={scenario.commitmentBase} scenario={scenario} document={plan} mode={mode} /></dd></div>
+                    <div><dt>Monthly obligations that continue</dt><dd><MoneyValue local={scenario.commitmentBase / scenario.fx.rateToBase} base={scenario.commitmentBase} scenario={scenario} document={plan} mode={mode} /></dd></div>
                   </dl>
 
                   <div className="saving-parent">
                     <div className="saving-parent-head">
-                      <span>Total monthly saving<small>Automatic investments + cash after costs</small></span>
-                      <MoneyValue local={scenario.totalSavingMonthly} base={scenario.totalSavingBase} scenario={scenario} document={plan} mode={mode} />
+                      <span>Total saved or left each month<small>Monthly investments + cash left after costs</small></span>
+                      <MoneyValue local={displayedSavings.local.total} base={displayedSavings.base.total} scenario={scenario} document={plan} mode={mode} />
                     </div>
                     <div className="saving-children">
-                      <div><span>↳ Total investments</span><MoneyValue local={scenario.totalInvestmentBase / scenario.fx.rateToBase} base={scenario.totalInvestmentBase} scenario={scenario} document={plan} mode={mode} /></div>
-                      <div><span>↳ Cash remaining</span><MoneyValue local={scenario.cashRemainingMonthly} base={scenario.cashRemainingBase} scenario={scenario} document={plan} mode={mode} /></div>
+                      <div><span>↳ Monthly investments</span><MoneyValue local={displayedSavings.local.investments} base={displayedSavings.base.investments} scenario={scenario} document={plan} mode={mode} /></div>
+                      <div><span>↳ Cash left each month</span><MoneyValue local={displayedSavings.local.cash} base={displayedSavings.base.cash} scenario={scenario} document={plan} mode={mode} /></div>
                     </div>
-                    <div className="saving-identity">Investments + cash remaining = total saving</div>
+                    <div className="saving-identity">Monthly investments + cash left = total saved or left</div>
                   </div>
 
                   <div className="scenario-rate"><span>{formatPercent(scenario.savingRate)} of gross saved</span><span>1 {scenario.currency} = {scenario.fx.rateToBase} {plan.baseCurrency}</span></div>
 
                   <details className="tile-breakdown">
                     <summary>Expand full calculation and sources</summary>
-                    <BreakdownGroup title="Gross-to-net deductions" items={scenario.breakdown.deduction} scenario={scenario} document={plan} />
-                    <BreakdownGroup title="Automatic investments · part of saving" items={scenario.breakdown.automaticInvestment} scenario={scenario} document={plan} />
-                    <BreakdownGroup title="Monthly living costs" items={scenario.breakdown.livingCost} scenario={scenario} document={plan} />
-                    <BreakdownGroup title="Continuing commitments" items={scenario.breakdown.commitment} scenario={scenario} document={plan} />
-                    <BreakdownGroup title="Planned post-tax investments · part of saving" items={scenario.breakdown.plannedInvestment} scenario={scenario} document={plan} />
+                    <BreakdownGroup title="Tax and other deductions" items={scenario.breakdown.deduction} scenario={scenario} document={plan} mode={mode} />
+                    <BreakdownGroup title="Monthly automatic payroll savings · part of total saved or left" items={scenario.breakdown.automaticInvestment} scenario={scenario} document={plan} mode={mode} />
+                    <BreakdownGroup title="Monthly living costs" items={scenario.breakdown.livingCost} scenario={scenario} document={plan} mode={mode} />
+                    <BreakdownGroup title="Monthly obligations that continue" items={scenario.breakdown.commitment} scenario={scenario} document={plan} mode={mode} />
+                    <BreakdownGroup title="Monthly investments from after-tax cash · part of saving" items={scenario.breakdown.plannedInvestment} scenario={scenario} document={plan} mode={mode} />
                     <section className="breakdown-group fx-breakdown">
                       <h4>Exchange-rate assumption</h4>
                       <p>1 {scenario.currency} = <strong>{scenario.fx.rateToBase} {plan.baseCurrency}</strong></p>
                       <p>{scenario.currency === plan.baseCurrency
-                        ? `No conversion needed · same as comparison currency${scenario.fx.source ? ` · ${scenario.fx.source}` : ""}${scenario.fx.asOf ? ` · as of ${scenario.fx.asOf}` : ""}`
+                        ? `No conversion needed · this plan uses ${plan.baseCurrency}, the home currency that anchors all charts and totals${scenario.fx.asOf ? ` · reference date ${scenario.fx.asOf}` : ""}`
                         : `${scenario.fx.source || "No source recorded"}${scenario.fx.asOf ? ` · as of ${scenario.fx.asOf}` : " · date not recorded"}`}</p>
                     </section>
                   </details>
 
                   <div className="scenario-actions">
-                    <button type="button" onClick={() => openScenarioEditor(scenario.id)}>Edit option</button>
+                    <button type="button" onClick={() => openScenarioEditor(scenario.id)}>Edit this place, job, or plan</button>
                     <button type="button" onClick={() => duplicateScenario(scenario.id)}>Duplicate</button>
                   </div>
                 </article>
-              ))}
+                );
+              })}
             </div>
           </section>
 
           {visible.length > 0 && (
             <>
-              <section className="section-block comparison-section">
-                <div className="section-heading">
-                  <div><span className="section-kicker">02 · Monthly comparison</span><h2>Total saving and its two parts</h2></div>
-                  <p>Total saving is the parent. It is always split into total investments and cash remaining—never three unrelated totals.</p>
+            <section className="section-block comparison-section">
+              <div className="section-heading">
+                  <div><span className="section-kicker">02 · Monthly comparison</span><h2>Total saved or left, split into its two parts</h2></div>
+                  <p>The total saved or left each month is always split into monthly investments and cash left—never three unrelated totals. Cash shown is the balancing remainder after currency rounding; calculations retain full precision.</p>
                 </div>
                 <div className="comparison-layout">
                   <div className="bar-panel panel">
-                    <div className="panel-title"><span>Total monthly saving in {plan.baseCurrency}</span><small>automatic investments + post-cost cash</small></div>
+                    <div className="panel-title"><span>Total saved or left each month in {plan.baseCurrency}</span><small>monthly investments + cash left after costs</small></div>
                     <div className="comparison-bars">
                       {[...visible].sort((a, b) => b.totalSavingBase - a.totalSavingBase).map((scenario, index) => {
                         const magnitude = Math.abs(scenario.totalSavingBase) / maxSavingMagnitude * 50;
@@ -2305,21 +2449,22 @@ export default function Home() {
                     </div>
                   </div>
                   <div className="cash-panel panel">
-                    <div className="panel-title"><span>How total saving is split</span><small>investments + cash remaining</small></div>
+                    <div className="panel-title"><span>How the total saved or left is split</span><small>monthly investments + cash left</small></div>
                     <div className="saving-split-list">
                       {[...visible].sort((a, b) => b.totalSavingBase - a.totalSavingBase).map((scenario) => {
                         const denominator = Math.max(1, scenario.totalSavingBase);
                         const investmentPct = Math.max(0, Math.min(100, scenario.totalInvestmentBase / denominator * 100));
                         const hasDeficit = scenario.totalSavingBase < 0 || scenario.cashRemainingBase < 0;
+                        const displayedSavings = balancedScenarioSavings(scenario, plan).base;
                         return (
                           <div className="saving-split-row" key={scenario.id}>
-                            <div><strong>{scenario.label}</strong><span>{formatMoney(scenario.totalSavingBase, plan.baseCurrency, plan.locale)} total</span></div>
+                            <div><strong>{scenario.label}</strong><span>{formatMoney(displayedSavings.total, plan.baseCurrency, plan.locale)} saved or left each month</span></div>
                             {hasDeficit ? (
-                              <div className="split-deficit">Cash is below zero after costs; this option has a monthly shortfall.</div>
+                              <div className="split-deficit">Cash is below zero after monthly costs; this place, job, or plan has a monthly shortfall.</div>
                             ) : (
                               <div className="split-rail"><i style={{ width: `${investmentPct}%`, background: scenario.color }} /><b /></div>
                             )}
-                            <small><span>Investment {formatMoney(scenario.totalInvestmentBase, plan.baseCurrency, plan.locale)}</span><span>Cash {formatMoney(scenario.cashRemainingBase, plan.baseCurrency, plan.locale)}</span></small>
+                            <small><span>Monthly investments {formatMoney(displayedSavings.investments, plan.baseCurrency, plan.locale)}</span><span>Cash left {formatMoney(displayedSavings.cash, plan.baseCurrency, plan.locale)}</span></small>
                           </div>
                         );
                       })}
@@ -2330,8 +2475,8 @@ export default function Home() {
 
               <section className="section-block projection-section">
                 <div className="section-heading projection-heading">
-                  <div><span className="section-kicker">03 · {plan.projectionAssumptions.years}-year estimate</span><h2>Choose exactly what the chart measures</h2></div>
-                  <button className="button ghost" onClick={openManualSetup}>Edit growth and inflation</button>
+                  <div><span className="section-kicker">03 · {plan.projectionAssumptions.years}-year future estimate</span><h2>Choose the monthly amount shown in each future chart</h2></div>
+                  <button className="button ghost" onClick={openManualSetup}>Edit future-estimate assumptions</button>
                 </div>
                 <div className="projection-metric-picker" aria-label="Projected financial metric">
                   {(Object.keys(projectionMeta) as ProjectionMetric[]).map((metric) => (
@@ -2339,7 +2484,7 @@ export default function Home() {
                   ))}
                 </div>
                 <div className="chart-legend">
-                  <i /><span><strong>Monthly {projectionMeta[projectionMetric].label.toLowerCase()}</strong> in {plan.baseCurrency}. {projectionMeta[projectionMetric].explanation}</span>
+                  <i /><span><strong>{projectionMeta[projectionMetric].label}</strong> in {plan.baseCurrency}, the home currency that anchors all charts and totals. {projectionMeta[projectionMetric].explanation}</span>
                 </div>
                 <div className="projection-grid">
                   {projections.map(({ scenario, years }) => {
@@ -2366,28 +2511,28 @@ export default function Home() {
                     );
                   })}
                 </div>
-                <p className="projection-note">Legend: each bar is monthly {projectionMeta[projectionMetric].label.toLowerCase()}; each headline is the sum of twelve months for every displayed year. Income grows {plan.projectionAssumptions.incomeGrowthPct}% yearly, living costs and commitments inflate {plan.projectionAssumptions.expenseInflationPct}% yearly, and planned post-tax investment targets stay constant. Tax rules, currency-rate changes, investment returns, bonuses, and job changes are not forecast.</p>
+                <p className="projection-note">Each bar shows one month; each headline adds twelve months for every displayed year. Income grows {plan.projectionAssumptions.incomeGrowthPct}% yearly, living costs and monthly obligations that continue inflate {plan.projectionAssumptions.expenseInflationPct}% yearly, and planned monthly investment targets stay constant. Tax rules, currency-rate changes, investment returns, bonuses, and job changes are not forecast.</p>
               </section>
 
               <section className="section-block matrix-section">
                 <div className="section-heading">
-                  <div><span className="section-kicker">04 · Qualitative assumptions</span><h2>Context the numbers cannot decide</h2></div>
-                  <p>Career, visa, childcare, transport, and family considerations remain visible text—not arbitrary scores.</p>
+                  <div><span className="section-kicker">04 · Important non-financial details</span><h2>Important details the monthly amounts cannot decide</h2></div>
+                  <p>Career, visa, childcare, transport, and family details remain visible text—not arbitrary scores.</p>
                 </div>
                 <div className="matrix-wrap panel">
                   <table className="decision-matrix">
                     <thead><tr><th>What is assumed</th>{visible.map((scenario) => <th key={scenario.id}><span>{flagGlyph(scenario.flag)}</span>{scenario.label}</th>)}</tr></thead>
                     <tbody>
                       {[
-                        ["Employment income", "Income included in the option", (s: DerivedScenario) => s.employment],
-                        ["Household earners", "People whose income is included", (s: DerivedScenario) => `${s.earners} ${s.earners === 1 ? "earner" : "earners"}`],
-                        ["Spouse income", "Whether spouse income is included", (s: DerivedScenario) => s.spouseJob],
-                        ["Childcare", "Care arrangement behind costs", (s: DerivedScenario) => s.childcare],
-                        ["Transport", "Transport assumption behind costs", (s: DerivedScenario) => s.transport],
-                        ["Residence / visa", "Current legal-status assumption", (s: DerivedScenario) => s.residency],
-                        ["Bonus", "Treatment in recurring totals", (s: DerivedScenario) => s.bonus],
-                        ["Benefits and terms", "Confirmed or included terms", (s: DerivedScenario) => s.benefits.join("; ") || "None listed"],
-                        ["Important uncertainties", "Items still to verify", (s: DerivedScenario) => s.risks.join("; ") || "None listed"],
+                        ["Who earns income in this plan", "People and income included in this place, job, or plan", (s: DerivedScenario) => s.employment],
+                        ["Number of earners counted", "People whose income is included in this plan", (s: DerivedScenario) => `${s.earners} ${s.earners === 1 ? "earner" : "earners"}`],
+                        ["Partner income included", "Whether a partner's income is included in this plan", (s: DerivedScenario) => s.spouseJob],
+                        ["Childcare arrangement and cost", "Care arrangement behind the monthly costs", (s: DerivedScenario) => s.childcare],
+                        ["Transport choice and cost", "Transport choice behind the monthly costs", (s: DerivedScenario) => s.transport],
+                        ["Residence or visa condition", "Legal-status condition used for this plan", (s: DerivedScenario) => s.residency],
+                        ["Bonus or one-time payment", "Whether it is included in recurring monthly amounts", (s: DerivedScenario) => s.bonus],
+                        ["Benefits included in this plan", "Confirmed or included benefits and terms", (s: DerivedScenario) => s.benefits.join("; ") || "None listed"],
+                        ["Important details still to verify", "Items that could change this plan", (s: DerivedScenario) => s.risks.join("; ") || "None listed"],
                       ].map(([label, note, getter]) => (
                         <tr className="text-row" key={label as string}>
                           <th><strong>{label as string}</strong><small>{note as string}</small></th>
@@ -2409,7 +2554,7 @@ export default function Home() {
                     {plan.researchItems.map((item) => {
                       const applicable = item.appliesToScenarioIds.length
                         ? plan.scenarios.filter((scenario) => item.appliesToScenarioIds.includes(scenario.id)).map((scenario) => scenario.label).join(", ")
-                        : "All options";
+                        : "All places, jobs, and plans";
                       return (
                         <article className="research-card" key={item.id}>
                           <div><span className={`research-status ${item.status}`}>{item.status}</span><span>{researchTopicLabels[item.topic]}</span></div>
@@ -2422,31 +2567,40 @@ export default function Home() {
                     })}
                   </div>
                 ) : (
-                  <div className="panel empty-research"><p>No research records yet. Add them in Shared settings or import a complete comparison file.</p><button className="button ghost" onClick={openManualSetup}>Add research records</button></div>
+                  <div className="panel empty-research"><p>No research records yet. Add them in Home currency, future estimates, and amounts used in every plan, or import a saved comparison file.</p><button className="button ghost" onClick={openManualSetup}>Add research records</button></div>
                 )}
               </section>
 
               <section className="section-block ledger-section">
                 <div className="section-heading">
-                  <div><span className="section-kicker">06 · How totals are calculated</span><h2>The same calculation for every option</h2></div>
-                  <p>Gross − non-saving deductions − automatic investments = net cash. Total saving = automatic investments + net cash − living costs − commitments.</p>
+                  <div><span className="section-kicker">06 · How monthly totals are calculated</span><h2>The same monthly calculation for every place, job, or plan</h2></div>
+                  <p>Gross income − tax and other non-saving deductions − automatic payroll saving = take-home cash. Total saved or left = monthly investments + cash left after living costs and commitments.</p>
                 </div>
                 <div className="matrix-wrap panel">
                   <table className="ledger-table">
                     <thead><tr><th>Monthly measure</th>{visible.map((scenario) => <th key={scenario.id}>{scenario.label}</th>)}</tr></thead>
                     <tbody>
                       {[
-                        ["Gross compensation", (s: DerivedScenario) => [s.grossMonthly, s.grossBase]],
-                        ["Non-saving deductions", (s: DerivedScenario) => [s.deductionMonthly, s.deductionBase]],
-                        ["Automatic investments", (s: DerivedScenario) => [s.automaticInvestmentMonthly, s.automaticInvestmentBase]],
-                        ["Net cash income", (s: DerivedScenario) => [s.netCashMonthly, s.netCashBase]],
+                        ["Monthly gross income before tax and deductions", (s: DerivedScenario) => [s.grossMonthly, s.grossBase]],
+                        ["Tax and other deductions", (s: DerivedScenario) => [s.deductionMonthly, s.deductionBase]],
+                        ["Monthly automatic payroll saving", (s: DerivedScenario) => [s.automaticInvestmentMonthly, s.automaticInvestmentBase]],
+                        ["Take-home cash", (s: DerivedScenario) => [s.netCashMonthly, s.netCashBase]],
                         ["Living costs", (s: DerivedScenario) => [s.livingMonthly, s.livingBase]],
-                        ["Continuing commitments", (s: DerivedScenario) => [s.commitmentBase / s.fx.rateToBase, s.commitmentBase]],
-                        ["Total saving", (s: DerivedScenario) => [s.totalSavingMonthly, s.totalSavingBase]],
-                        ["↳ Total investments", (s: DerivedScenario) => [s.totalInvestmentBase / s.fx.rateToBase, s.totalInvestmentBase]],
-                        ["↳ Cash remaining", (s: DerivedScenario) => [s.cashRemainingMonthly, s.cashRemainingBase]],
+                        ["Monthly obligations that continue", (s: DerivedScenario) => [s.commitmentBase / s.fx.rateToBase, s.commitmentBase]],
+                        ["Total saved or left each month", (s: DerivedScenario) => {
+                          const displayed = balancedScenarioSavings(s, plan);
+                          return [displayed.local.total, displayed.base.total];
+                        }],
+                        ["↳ Monthly investments", (s: DerivedScenario) => {
+                          const displayed = balancedScenarioSavings(s, plan);
+                          return [displayed.local.investments, displayed.base.investments];
+                        }],
+                        ["↳ Cash left each month", (s: DerivedScenario) => {
+                          const displayed = balancedScenarioSavings(s, plan);
+                          return [displayed.local.cash, displayed.base.cash];
+                        }],
                       ].map(([label, getter]) => (
-                        <tr key={label as string} className={label === "Total saving" ? "total-row" : String(label).startsWith("↳") ? "child-row" : ""}>
+                        <tr key={label as string} className={label === "Total saved or left each month" ? "total-row" : String(label).startsWith("↳") ? "child-row" : ""}>
                           <th>{label as string}</th>
                           {visible.map((scenario) => {
                             const [local, base] = (getter as (s: DerivedScenario) => number[])(scenario);
@@ -2464,9 +2618,9 @@ export default function Home() {
                   <div><span className="section-kicker">Rules used everywhere</span><h2>Same rules, no hidden arithmetic</h2></div>
                   <div className="evidence-rules">
                     <p><strong>External help received:</strong> may be recorded for context, never counted as income or expense.</p>
-                    <p><strong>Commitments:</strong> shared values are entered once in {plan.baseCurrency} and applied equally.</p>
-                    <p><strong>Investments:</strong> part of total saving; total saving always equals investments plus cash remaining.</p>
-                    <p><strong>Accuracy:</strong> every input can be marked confirmed, estimated, or needing a source.</p>
+                    <p><strong>Monthly obligations that continue:</strong> an amount entered once for every plan is stored in {plan.baseCurrency}, the home currency that anchors all charts and totals.</p>
+                    <p><strong>Monthly investments:</strong> part of total saved or left; total saved or left always equals monthly investments plus cash left.</p>
+                    <p><strong>How reliable is this number?</strong> Every input can be marked confirmed, estimated, or still needing a source.</p>
                   </div>
                   {plan.excludedSupport.length > 0 && (
                     <div className="excluded-support-summary">
@@ -2489,25 +2643,25 @@ export default function Home() {
       <footer className="footer">
         <div><strong>Wayfinder</strong><span>Private relocation comparison</span></div>
         <div className="footer-actions">
-          <button onClick={openManualSetup}>Shared settings</button>
-          {plan.scenarios.length > 0 && <button onClick={() => setShareOpen(true)}>Share / backup</button>}
-          <button onClick={() => fileInputRef.current?.click()}>Import complete comparison</button>
+          <button onClick={openManualSetup}>Home currency, future estimates, and amounts used in every plan</button>
+          {plan.scenarios.length > 0 && <button onClick={() => setShareOpen(true)}>Download or import</button>}
+          <button onClick={() => fileInputRef.current?.click()}>Import a saved comparison file</button>
           {(plan.scenarios.length > 0 || plan.excludedSupport.length > 0 || recoveryAvailable) && <button onClick={() => setClearConfirm(true)}>Clear this browser</button>}
         </div>
-        <input ref={fileInputRef} className="sr-only" type="file" accept="application/json,.json" aria-label="Select complete comparison JSON file" onChange={importDocument} />
+        <input ref={fileInputRef} className="sr-only" type="file" accept="application/json,.json" aria-label="Select a saved comparison JSON file" onChange={importDocument} />
       </footer>
 
       {shareOpen && plan.scenarios.length > 0 && (
         <div className="modal-backdrop">
-          <button className="modal-dismiss" type="button" tabIndex={-1} aria-label="Close sharing options" onClick={() => setShareOpen(false)} />
+          <button className="modal-dismiss" type="button" tabIndex={-1} aria-label="Close download and import options" onClick={() => setShareOpen(false)} />
           <section className="share-modal" role="dialog" aria-modal="true" aria-labelledby="share-title" data-dialog-id="share" tabIndex={-1}>
-            <div className="modal-head"><div><span className="section-kicker">Share or back up</span><h2 id="share-title">Choose what to download</h2></div><button type="button" className="close-button" onClick={() => setShareOpen(false)} aria-label="Close sharing options">×</button></div>
-            <p className="modal-intro">Financial exports are sensitive. GitHub contains only the empty application and fictional examples—never your browser data.</p>
-            {legacyRepairScenarios.length > 0 && <p className="modal-intro"><strong>Complete the older options’ conversion date and source first.</strong> Until then, calculated family views and reusable comparison files stay unavailable.</p>}
+            <div className="modal-head"><div><span className="section-kicker">Keep a copy or prepare a family summary</span><h2 id="share-title">Download or import a comparison file</h2></div><button type="button" className="close-button" onClick={() => setShareOpen(false)} aria-label="Close download and import options">×</button></div>
+            <p className="modal-intro">Downloaded financial files are sensitive. This public project includes only the empty application and fictional examples—never your browser data.</p>
+            {legacyRepairScenarios.length > 0 && <p className="modal-intro"><strong>Complete the older saved plans’ conversion date and source first.</strong> Until then, calculated family views and reusable comparison files stay unavailable.</p>}
             <div className="share-choices three-up">
-              <article><span className="share-icon" aria-hidden="true">↗</span><div><h3>Family view</h3><p>A read-only HTML report with full calculations and assumptions. It works offline in a modern browser.</p></div><button className="button primary" disabled={legacyRepairScenarios.length > 0} onClick={downloadFamilyView}>Download family view</button></article>
-              <article><span className="share-icon" aria-hidden="true">⇄</span><div><h3>Editable comparison file</h3><p>The complete comparison file: shared settings, every option, assumptions, evidence, and sources.</p></div><button className="button ghost" disabled={legacyRepairScenarios.length > 0} onClick={exportDocument}>Download editable comparison file</button></article>
-              <article><span className="share-icon" aria-hidden="true">◎</span><div><h3>Blank comparison template</h3><p>An empty JSON comparison template with all standard categories, ready to fill in and preview before import.</p></div><button className="button ghost" onClick={downloadAgentTemplate}>Download blank comparison template</button></article>
+              <article><span className="share-icon" aria-hidden="true">↗</span><div><h3>Family-readable summary</h3><p>A read-only HTML summary with the saved calculations and assumptions. It works offline in a modern browser.</p></div><button className="button primary" disabled={legacyRepairScenarios.length > 0} onClick={downloadFamilyView}>Download family-readable summary</button></article>
+              <article><span className="share-icon" aria-hidden="true">⇄</span><div><h3>Saved comparison file you can edit</h3><p>The complete file: home currency, future estimates, amounts used in every plan, every place, job, or plan, assumptions, confidence, and sources.</p></div><button className="button ghost" disabled={legacyRepairScenarios.length > 0} onClick={exportDocument}>Download saved comparison file</button></article>
+              <article><span className="share-icon" aria-hidden="true">◎</span><div><h3>Empty comparison file</h3><p>An empty JSON file with standard categories, ready to fill in and preview before importing.</p></div><button className="button ghost" onClick={downloadAgentTemplate}>Download empty comparison file</button></article>
             </div>
             <div className="share-network-note"><strong>Import safety</strong><p>Wayfinder validates the entire file and shows a preview before replacement. No import silently overwrites the current dashboard.</p></div>
           </section>
@@ -2516,43 +2670,63 @@ export default function Home() {
 
       {modelDraft && (
         <div className="modal-backdrop">
-          <button className="modal-dismiss" type="button" tabIndex={-1} aria-label="Close shared settings" onClick={() => setModelDraft(null)} />
+          <button className="modal-dismiss" type="button" tabIndex={-1} aria-label="Close home currency, future estimates, and amounts used in every plan" onClick={closeModelEditor} />
           <form className="scenario-modal model-modal" role="dialog" aria-modal="true" aria-labelledby="model-title" data-dialog-id="comparison-model" tabIndex={-1} onSubmit={saveModel} onInvalidCapture={revealFirstInvalidControl} onChangeCapture={() => { setFormNotice(""); setFormIssues([]); }}>
-            <div className="modal-head"><div><span className="section-kicker">Used by every option</span><h2 id="model-title">Shared settings</h2></div><button type="button" className="close-button" onClick={() => setModelDraft(null)} aria-label="Close shared settings">×</button></div>
-            <p className="modal-intro">Enter these settings once. Monthly items for each option are filled separately, while shared amounts are entered once in the comparison currency.</p>
+            <div className="modal-head"><div><span className="section-kicker">Settings applied to every plan</span><h2 id="model-title">Home currency, future estimates, and amounts used in every plan</h2></div><button type="button" className="close-button" onClick={closeModelEditor} aria-label="Close home currency, future estimates, and amounts used in every plan">×</button></div>
+            <p className="modal-intro">Set the home currency that anchors all charts and totals, plus future-estimate assumptions. Each alternative plan’s local currency is converted to the home currency. Enter a monthly amount once only when it applies to every place, job, or plan; otherwise enter a separate monthly amount for each one.</p>
             <FormErrorSummary notice={formNotice} issues={formIssues} document={modelDraft} />
 
             <fieldset className="editor-section">
-              <legend>Comparison and forecast settings</legend>
+              <legend>Home currency and future-estimate settings</legend>
               <div className="form-grid">
                 <label className="wide"><span>Comparison title</span><input required maxLength={160} placeholder="Name this comparison" value={modelDraft.title} onChange={(event) => setModelDraft({ ...modelDraft, title: event.target.value })} /></label>
-                <label><span>Comparison currency<small>Three-letter code used for every comparison</small></span><input required minLength={3} maxLength={3} pattern="[A-Za-z]{3}" placeholder="USD" title="Enter a three-letter currency code such as USD" disabled={comparisonCurrencyLocked} value={modelDraft.baseCurrency} onChange={(event) => setModelDraft({ ...modelDraft, baseCurrency: currencyCode(event.target.value) })} /></label>
-                <label><span>Number format<small>For example en-US or en-GB</small></span><input required maxLength={50} placeholder="en-US" value={modelDraft.locale} onChange={(event) => setModelDraft({ ...modelDraft, locale: event.target.value })} /></label>
-                <label><span>Annual income growth %<small>Enter your assumption</small></span><input required min="-25" max="100" step="0.1" type="number" placeholder="5" value={projectionInputDraft?.incomeGrowthPct ?? ""} onChange={(event) => setProjectionInputDraft((current) => ({ ...(current ?? { incomeGrowthPct: "", expenseInflationPct: "", years: "" }), incomeGrowthPct: event.target.value }))} /></label>
-                <label><span>Annual expense inflation %<small>Enter your assumption</small></span><input required min="-25" max="100" step="0.1" type="number" placeholder="3" value={projectionInputDraft?.expenseInflationPct ?? ""} onChange={(event) => setProjectionInputDraft((current) => ({ ...(current ?? { incomeGrowthPct: "", expenseInflationPct: "", years: "" }), expenseInflationPct: event.target.value }))} /></label>
-                <label><span>Projection years<small>Enter your time period</small></span><input required min="1" max="20" step="1" type="number" placeholder="5" value={projectionInputDraft?.years ?? ""} onChange={(event) => setProjectionInputDraft((current) => ({ ...(current ?? { incomeGrowthPct: "", expenseInflationPct: "", years: "" }), years: event.target.value }))} /></label>
+                <label><span>Home currency for all charts and totals<small>This three-letter currency anchors all charts and totals. Each alternative plan’s local currency is converted to it. It is normally the home-currency anchor.</small></span><input required minLength={3} maxLength={3} pattern="[A-Za-z]{3}" placeholder="USD" title="Enter a three-letter currency code such as USD" disabled={comparisonCurrencyLocked} value={modelDraft.baseCurrency} onChange={(event) => setModelDraft({ ...modelDraft, baseCurrency: currencyCode(event.target.value) })} /></label>
+                <label><span>Number format for amounts<small>For example en-US or en-GB</small></span><input required maxLength={50} placeholder="en-US" value={modelDraft.locale} onChange={(event) => setModelDraft({ ...modelDraft, locale: event.target.value })} /></label>
+                <label><span>Annual income growth for the future estimate %<small>Enter your own assumption; this does not change current monthly amounts.</small></span><input required min="-25" max="100" step="0.1" type="number" placeholder="5" value={projectionInputDraft?.incomeGrowthPct ?? ""} onChange={(event) => setProjectionInputDraft((current) => ({ ...(current ?? { incomeGrowthPct: "", expenseInflationPct: "", years: "" }), incomeGrowthPct: event.target.value }))} /></label>
+                <label><span>Annual cost inflation for the future estimate %<small>Enter your own assumption; this does not change current monthly amounts.</small></span><input required min="-25" max="100" step="0.1" type="number" placeholder="3" value={projectionInputDraft?.expenseInflationPct ?? ""} onChange={(event) => setProjectionInputDraft((current) => ({ ...(current ?? { incomeGrowthPct: "", expenseInflationPct: "", years: "" }), expenseInflationPct: event.target.value }))} /></label>
+                <label><span>Years to show in the future estimate<small>Choose how many future years the charts show.</small></span><input required min="1" max="20" step="1" type="number" placeholder="5" value={projectionInputDraft?.years ?? ""} onChange={(event) => setProjectionInputDraft((current) => ({ ...(current ?? { incomeGrowthPct: "", expenseInflationPct: "", years: "" }), years: event.target.value }))} /></label>
+                {modelDraft.scenarios.length > 0 && (
+                  <label className="wide"><span>Current job and home-country position<small>Choose the saved place, job, or plan that represents your current household position. This does not change any monthly amounts.</small></span><select required value={modelDraft.currentScenarioId ?? ""} onChange={(event) => setModelDraft({ ...modelDraft, currentScenarioId: event.target.value || null })}><option value="">Choose the current job and home-country position</option>{modelDraft.scenarios.map((scenario) => <option key={scenario.id} value={scenario.id}>{scenario.label || "Unnamed place, job, or plan"}</option>)}</select></label>
+                )}
               </div>
               {modelDraft.scenarios.length === 0 && (
                 <label className="setup-review-confirmation">
                   <input required type="checkbox" checked={setupSettingsReviewed} onChange={(event) => setSetupSettingsReviewed(event.target.checked)} />
-                  <span>I reviewed the comparison currency, number format, growth, inflation, and projection years. These are my inputs, not automatic forecasts.</span>
+                  <span>I reviewed the home currency for all charts and totals, number format, growth, inflation, and future-estimate years. These are my inputs, not automatic forecasts.</span>
                 </label>
               )}
               {comparisonCurrencyLocked && (
                 <div className="currency-restart-note">
                   <p className="field-note">{modelDraft.scenarios.length > 0
-                    ? "The comparison currency stays fixed after options are added, so saved amounts cannot silently change meaning."
-                    : "The comparison currency stays fixed while shared or excluded-support amounts are entered, so those numbers cannot silently change meaning. Set those amounts to zero or start again to choose another currency."}</p>
+                    ? "The home currency that anchors all charts and totals stays fixed after plans are added, so saved amounts cannot silently change meaning."
+                    : "The home currency that anchors all charts and totals stays fixed while applies-to-every-plan or excluded-support amounts are entered, so those numbers cannot silently change meaning. Set those amounts to zero or start again to choose another currency."}</p>
                   <button type="button" className="button ghost" onClick={() => { setCurrencyRestartDraft(cloneDocument(modelDraft)); setModelDraft(null); setClearConfirm(true); }}>Back up or start again with another currency</button>
                 </div>
               )}
             </fieldset>
+
+            {modelDraft.legacyMigrationNotes.length > 0 && (
+              <EditorSection
+                title="Notes kept from an older file"
+                summary={`${modelDraft.legacyMigrationNotes.length} ${modelDraft.legacyMigrationNotes.length === 1 ? "note" : "notes"}`}
+                note="These notes never affect calculations and are excluded from the family report. They are kept only as read-only context from an earlier file."
+                collapsible
+              >
+                <ul className="legacy-migration-notes">
+                  {modelDraft.legacyMigrationNotes.map((note, index) => <li key={`${note}-${index}`}>{note}</li>)}
+                </ul>
+                <button type="button" className="button ghost" onClick={() => setModelDraft({ ...modelDraft, legacyMigrationNotes: [] })}>Remove all retained old notes</button>
+              </EditorSection>
+            )}
 
             {(Object.keys(groupMeta) as FieldGroup[]).map((group) => {
               const fields = modelDraft.fieldDefinitions.filter((field) => field.group === group);
               const allowShared = group === "commitment" || group === "plannedInvestment";
               const blankSharedFields = fields.filter((field) =>
                 field.scope === "shared" && !enteredSharedAmounts.has(field.id),
+              );
+              const pendingFields = fields.filter((field) =>
+                field.scope === "perOption" && (pendingPerOptionAmounts[field.id]?.size ?? 0) > 0,
               );
               return (
                 <EditorSection
@@ -2570,13 +2744,13 @@ export default function Home() {
                             <input aria-label={`${groupMeta[group].short} field label`} required maxLength={120} placeholder="Name this monthly item" value={field.label} onChange={(event) => updateModelField(field.id, { label: event.target.value })} />
                             <input aria-label={`${field.label || groupMeta[group].short} description`} maxLength={500} placeholder="What does this amount include?" value={field.description} onChange={(event) => updateModelField(field.id, { description: event.target.value })} />
                             <div className="field-classification">
-                              <label><span>Category</span><select aria-label={`${field.label || "New item"} category`} value={field.group} onChange={(event) => { const nextGroup = event.target.value as FieldGroup; reclassifyModelField(field.id, nextGroup, field.scope); }}>{(Object.keys(groupMeta) as FieldGroup[]).map((candidate) => <option key={candidate} value={candidate}>{groupMeta[candidate].title}</option>)}</select></label>
-                              <label><span>Used in</span><select aria-label={`${field.label || "New item"} scope`} disabled={!allowShared} value={field.scope} onChange={(event) => reclassifyModelField(field.id, field.group, event.target.value as FieldScope)}><option value="perOption">Each option separately</option><option value="shared">Same amount in every option</option></select></label>
+                              <label><span>What this monthly amount is for</span><select aria-label={`${field.label || "New item"} category`} value={field.group} onChange={(event) => { const nextGroup = event.target.value as FieldGroup; reclassifyModelField(field.id, nextGroup, field.scope); }}>{(Object.keys(groupMeta) as FieldGroup[]).map((candidate) => <option key={candidate} value={candidate}>{groupMeta[candidate].title}</option>)}</select></label>
+                              <label><span>Where this monthly amount applies</span><select aria-label={`${field.label || "New item"} scope`} disabled={!allowShared} value={field.scope} onChange={(event) => reclassifyModelField(field.id, field.group, event.target.value as FieldScope)}><option value="perOption">Enter a separate amount for each plan</option><option value="shared">Enter once for every plan</option></select></label>
                             </div>
                           </div>
                           {field.scope === "shared" && (
                             <div className="shared-amount">
-                              <label><span>Monthly amount in {modelDraft.baseCurrency || "comparison currency"}<small>Choose the comparison currency first</small></span><input required aria-label={`${field.label} monthly amount in ${modelDraft.baseCurrency || "comparison currency"}`} disabled={!/^[A-Z]{3}$/.test(modelDraft.baseCurrency)} min="0" step="any" type="number" value={enteredSharedAmounts.has(field.id) ? modelDraft.sharedValues[field.id] ?? 0 : ""} onChange={(event) => updateSharedAmount(field.id, event.target.value)} /></label>
+                              <label><span>Monthly amount entered once for every plan in {modelDraft.baseCurrency || "the home currency for all charts and totals"}<small>This same amount is included in every place, job, or plan; choose the home currency for all charts and totals first.</small></span><input required aria-label={`${field.label} monthly amount in ${modelDraft.baseCurrency || "home currency for all charts and totals"}`} disabled={!/^[A-Z]{3}$/.test(modelDraft.baseCurrency)} min="0" step="any" type="number" value={enteredSharedAmounts.has(field.id) ? modelDraft.sharedValues[field.id] ?? 0 : ""} onChange={(event) => updateSharedAmount(field.id, event.target.value)} /></label>
                               <EvidenceEditor evidence={modelDraft.sharedEvidence[field.id] ?? createUnknownEvidence()} onChange={(evidence) => setModelDraft({ ...modelDraft, sharedEvidence: { ...modelDraft.sharedEvidence, [field.id]: evidence } })} />
                             </div>
                           )}
@@ -2586,7 +2760,7 @@ export default function Home() {
                           <div className="field-removal-confirm" role="alert">
                             <div>
                               <strong>Remove “{field.label}”?</strong>
-                              <span>{legacyRepairScenarios.length > 0 ? "No reusable backup is available until every older option has a real conversion date and source. " : ""}This removes the item, its amount, and its source details from Shared settings and all {modelDraft.scenarios.length} {modelDraft.scenarios.length === 1 ? "option" : "options"}.</span>
+                              <span>{legacyRepairScenarios.length > 0 ? "No reusable backup is available until every older saved plan has a real conversion date and source. " : ""}This removes the item, its monthly amount, and its source details from the home currency, future estimates, and amounts used in every plan, plus all {modelDraft.scenarios.length} {modelDraft.scenarios.length === 1 ? "place, job, or plan" : "places, jobs, or plans"}.</span>
                             </div>
                             <button type="button" className="button ghost" disabled={legacyRepairScenarios.length > 0} onClick={exportDocument}>{legacyRepairScenarios.length > 0 ? "Reusable backup unavailable" : "Download saved backup"}</button>
                             <button type="button" className="button ghost" onClick={() => setDeleteFieldConfirm(null)}>Cancel</button>
@@ -2596,14 +2770,54 @@ export default function Home() {
                       </Fragment>
                     ))}
                   </div>
+                  {pendingFields.length > 0 && (
+                    <div className="amount-field-list" aria-live="polite">
+                      <p className="field-note">These new monthly items are not saved yet. Enter an amount for every existing place, job, or plan, or explicitly use 0 where an item does not apply.</p>
+                      {modelDraft.scenarios.map((scenario) => {
+                        const pendingForScenario = pendingFields.filter((field) =>
+                          pendingPerOptionAmounts[field.id]?.has(scenario.id),
+                        );
+                        if (!pendingForScenario.length) return null;
+                        return (
+                          <fieldset className="editor-section" key={scenario.id}>
+                            <legend>{scenario.label || "Existing place, job, or plan"}</legend>
+                            {pendingForScenario.map((field) => {
+                              const label = `${field.label || "New monthly item"} for ${scenario.label || "this place, job, or plan"}`;
+                              return (
+                                <CurrencyAmountEditor
+                                  key={`${field.id}-${scenario.id}-${scenario.currency}-${modelDraft.baseCurrency}`}
+                                  id={`pending-${field.id}-${scenario.id}`}
+                                  label={label}
+                                  description="This amount is not saved until you enter it or explicitly use 0."
+                                  localAmount={scenario.values[field.id] ?? 0}
+                                  localCurrency={scenario.currency}
+                                  baseCurrency={modelDraft.baseCurrency}
+                                  rateToBase={scenario.fx.rateToBase}
+                                  entered={!pendingPerOptionAmounts[field.id]?.has(scenario.id)}
+                                  onChangeLocal={(amount) => updatePendingPerOptionAmount(field.id, scenario.id, amount)}
+                                />
+                              );
+                            })}
+                            <button
+                              type="button"
+                              className="button ghost"
+                              onClick={() => markPendingPerOptionAmountsAsZero(pendingForScenario.map((field) => field.id), scenario.id)}
+                            >
+                              Use 0 for {pendingForScenario.length} blank {pendingForScenario.length === 1 ? "monthly amount" : "monthly amounts"} for {scenario.label || "this place, job, or plan"} in this section
+                            </button>
+                          </fieldset>
+                        );
+                      })}
+                    </div>
+                  )}
                   {blankSharedFields.length > 0 && (
                     <button type="button" className="button ghost" onClick={() => markSharedAmountsAsZero(blankSharedFields.map((field) => field.id))}>
-                      Use 0 for {blankSharedFields.length} blank shared {blankSharedFields.length === 1 ? "item" : "items"} in this section
+                      Use 0 for {blankSharedFields.length} blank monthly {blankSharedFields.length === 1 ? "amount" : "amounts"} that apply to every place, job, or plan in this section
                     </button>
                   )}
                   <div className="add-field-actions">
-                    <button type="button" className="button ghost" onClick={() => addModelField(group, "perOption")}>＋ Add monthly item for each option</button>
-                    {allowShared && <button type="button" className="button ghost" onClick={() => addModelField(group, "shared")}>＋ Add one shared monthly item</button>}
+                    <button type="button" className="button ghost" onClick={() => addModelField(group, "perOption")}>＋ Add a monthly amount for each place, job, or plan</button>
+                    {allowShared && <button type="button" className="button ghost" onClick={() => addModelField(group, "shared")}>＋ Add one monthly amount for every place, job, or plan</button>}
                   </div>
                 </EditorSection>
               );
@@ -2618,9 +2832,9 @@ export default function Home() {
               <div className="excluded-support-list">
                 {modelDraft.excludedSupport.map((item) => (
                   <div className="excluded-support-row" key={item.id}>
-                    <label><span>Name</span><input required maxLength={120} aria-label="Excluded support label" placeholder="Name the possible support" value={item.label} onChange={(event) => setModelDraft({ ...modelDraft, excludedSupport: modelDraft.excludedSupport.map((candidate) => candidate.id === item.id ? { ...candidate, label: event.target.value } : candidate) })} /></label>
-                    <label><span>Monthly amount in {modelDraft.baseCurrency || "comparison currency"}<small>Context only; choose the currency first</small></span><input required aria-label={`${item.label} monthly amount in ${modelDraft.baseCurrency || "comparison currency"}`} disabled={!/^[A-Z]{3}$/.test(modelDraft.baseCurrency)} min="0" step="any" type="number" value={enteredSupportAmounts.has(item.id) ? item.monthlyBase : ""} onChange={(event) => updateSupportAmount(item.id, event.target.value)} /></label>
-                    <label><span>Note</span><input maxLength={1000} aria-label={`${item.label || "Excluded support"} note`} value={item.note} placeholder="Who may help and what could change?" onChange={(event) => setModelDraft({ ...modelDraft, excludedSupport: modelDraft.excludedSupport.map((candidate) => candidate.id === item.id ? { ...candidate, note: event.target.value } : candidate) })} /></label>
+                    <label><span>Possible support name</span><input required maxLength={120} aria-label="Excluded support label" placeholder="Name the possible support" value={item.label} onChange={(event) => setModelDraft({ ...modelDraft, excludedSupport: modelDraft.excludedSupport.map((candidate) => candidate.id === item.id ? { ...candidate, label: event.target.value } : candidate) })} /></label>
+                    <label><span>Possible monthly support in {modelDraft.baseCurrency || "the home currency for all charts and totals"}<small>Context only; it does not change income, costs, money saved or left, or charts. Choose the home currency for all charts and totals first.</small></span><input required aria-label={`${item.label} monthly amount in ${modelDraft.baseCurrency || "home currency for all charts and totals"}`} disabled={!/^[A-Z]{3}$/.test(modelDraft.baseCurrency)} min="0" step="any" type="number" value={enteredSupportAmounts.has(item.id) ? item.monthlyBase : ""} onChange={(event) => updateSupportAmount(item.id, event.target.value)} /></label>
+                    <label><span>Context note</span><input maxLength={1000} aria-label={`${item.label || "Excluded support"} note`} value={item.note} placeholder="Who may help and what could change?" onChange={(event) => setModelDraft({ ...modelDraft, excludedSupport: modelDraft.excludedSupport.map((candidate) => candidate.id === item.id ? { ...candidate, note: event.target.value } : candidate) })} /></label>
                     <button type="button" onClick={() => { setModelDraft({ ...modelDraft, excludedSupport: modelDraft.excludedSupport.filter((candidate) => candidate.id !== item.id) }); setEnteredSupportAmounts((current) => { const next = new Set(current); next.delete(item.id); return next; }); }}>Remove</button>
                   </div>
                 ))}
@@ -2630,7 +2844,7 @@ export default function Home() {
 
             <EditorSection
               title="Research and sources"
-              note="Use official or primary sources where possible. Record the dated finding, source, and options it affects; research notes never change money totals by themselves."
+              note="Use official or primary sources where possible. Record the dated finding, source, and places, jobs, or plans it affects; research notes never change money totals by themselves."
               collapsible
               summary={`${modelDraft.researchItems.length} ${modelDraft.researchItems.length === 1 ? "source" : "sources"}`}
             >
@@ -2649,7 +2863,7 @@ export default function Home() {
                       <label className="wide"><span>Review note</span><input maxLength={2000} value={item.note} onChange={(event) => setModelDraft({ ...modelDraft, researchItems: modelDraft.researchItems.map((candidate) => candidate.id === item.id ? { ...candidate, note: event.target.value } : candidate) })} /></label>
                     </div>
                     <div className="research-applicability">
-                      <strong>Applies to</strong><small>Leave every box clear to apply it to all options.</small>
+                      <strong>Applies to which places, jobs, or plans?</strong><small>Leave every box clear to apply it to every place, job, and plan.</small>
                       <div>{modelDraft.scenarios.map((scenario) => <label key={scenario.id}><input type="checkbox" checked={item.appliesToScenarioIds.includes(scenario.id)} onChange={() => setModelDraft({ ...modelDraft, researchItems: modelDraft.researchItems.map((candidate) => candidate.id === item.id ? { ...candidate, appliesToScenarioIds: candidate.appliesToScenarioIds.includes(scenario.id) ? candidate.appliesToScenarioIds.filter((id) => id !== scenario.id) : [...candidate.appliesToScenarioIds, scenario.id] } : candidate) })} />{scenario.label}</label>)}</div>
                     </div>
                     <button type="button" className="remove-field" onClick={() => setModelDraft({ ...modelDraft, researchItems: modelDraft.researchItems.filter((candidate) => candidate.id !== item.id) })}>Remove research record</button>
@@ -2659,52 +2873,48 @@ export default function Home() {
               <button type="button" className="button ghost" onClick={() => setModelDraft({ ...modelDraft, researchItems: [...modelDraft.researchItems, { id: createStableId("research"), topic: "other", title: "", finding: "", appliesToScenarioIds: [], status: "question", publisher: "", sourceTitle: "", sourceUrl: "", asOf: null, note: "" }] })}>＋ Add research record</button>
             </EditorSection>
 
-            {modelDraft.migrationNotes.length > 0 && (
-              <section className="migration-notes"><strong>Migration review needed</strong>{modelDraft.migrationNotes.map((note) => <p key={note}>{note}</p>)}</section>
-            )}
-
-            <div className="modal-actions"><span /><button type="button" className="button ghost" onClick={() => setModelDraft(null)}>Cancel</button><button type="submit" className="button primary">{modelDraft.scenarios.length ? "Apply shared settings" : "Save settings and enter current situation"}</button></div>
+            <div className="modal-actions"><span /><button type="button" className="button ghost" onClick={closeModelEditor}>Cancel</button><button type="submit" className="button primary">{modelDraft.scenarios.length ? "Apply home currency, future estimates, and amounts used in every plan" : "Save settings and enter your current place, job, or plan"}</button></div>
           </form>
         </div>
       )}
 
       {editor && (
         <div className="modal-backdrop">
-          <button className="modal-dismiss" type="button" tabIndex={-1} aria-label="Close option editor" onClick={() => setEditor(null)} />
+          <button className="modal-dismiss" type="button" tabIndex={-1} aria-label="Close place, job, or plan editor" onClick={() => setEditor(null)} />
           <form className="scenario-modal" role="dialog" aria-modal="true" aria-labelledby="scenario-editor-title" data-dialog-id="scenario-editor" tabIndex={-1} onSubmit={saveScenario} onInvalidCapture={revealFirstInvalidControl} onChangeCapture={() => { setFormNotice(""); setFormIssues([]); }}>
-            <div className="modal-head"><div><span className="section-kicker">{firstScenarioSetup ? "Current situation" : "Option editor"}</span><h2 id="scenario-editor-title">{firstScenarioSetup ? "Enter your current option" : editingExisting ? "Edit this option" : "Add a new option"}</h2></div><button type="button" className="close-button" onClick={() => setEditor(null)} aria-label="Close editor">×</button></div>
-            <p className="modal-intro">Every amount shows both the option currency ({editor.currency}) and comparison currency ({plan.baseCurrency}). Edit either one; the linked amount updates automatically.</p>
+            <div className="modal-head"><div><span className="section-kicker">{editorRepresentsCurrentPosition ? "Your current job and home-country household position" : "Possible job, move, or household plan"}</span><h2 id="scenario-editor-title">{firstScenarioSetup ? "Enter your current job and home-country household position" : editingCurrentScenario ? "Edit your current job and home-country household position" : editingExisting ? "Edit this place, job, or plan" : "Add another possible job, move, or household plan"}</h2></div><button type="button" className="close-button" onClick={() => setEditor(null)} aria-label="Close place, job, or plan editor">×</button></div>
+            <p className="modal-intro">{editorRepresentsCurrentPosition ? "This saved plan represents your current job and home-country household position." : "Describe this possible job, move, or household plan."} Every amount shows this plan’s currency ({editor.currency}) and the home currency that anchors all charts and totals ({plan.baseCurrency}). Edit either amount; the linked amount updates automatically.</p>
             <FormErrorSummary notice={formNotice} issues={formIssues} document={plan} />
 
             <fieldset className="editor-section">
-              <legend>Option, currency, and income</legend>
+              <legend>{editorRepresentsCurrentPosition ? "Current job and home-country household position" : "Possible job, move, or household plan"}, currency, and income</legend>
               <div className="form-grid">
-                <label className="wide"><span>Option name</span><input required maxLength={160} placeholder="For example: Current household" value={editor.label} onChange={(event) => updateEditor("label", event.target.value)} /></label>
-                <label className="wide"><span>Location</span><input required maxLength={240} placeholder="City and country" value={editor.location} onChange={(event) => updateEditor("location", event.target.value)} /></label>
-                <label className="wide"><span>Income summary</span><input required maxLength={500} placeholder="Who is working and which income is included?" value={editor.employment} onChange={(event) => updateEditor("employment", event.target.value)} /></label>
-                <label><span>Status</span><input required maxLength={120} placeholder="Current, offer, or planning case" value={editor.status} onChange={(event) => updateEditor("status", event.target.value)} /></label>
-                <label><span>Country code / badge</span><input required maxLength={3} placeholder="US" value={editor.flag} onChange={(event) => updateEditor("flag", event.target.value.toUpperCase())} /></label>
-                <label><span>Household earners included</span><input required min="0" max="20" step="1" type="number" placeholder="Enter 0, 1, 2…" value={earnersInputDraft ?? ""} onChange={(event) => setEarnersInputDraft(event.target.value)} /></label>
-                <label><span>Option currency<small>{optionCurrencyLocked ? "Locked so existing amounts cannot be reinterpreted. Add a new option to use another currency." : "Choose before entering salary or costs"}</small></span><input required minLength={3} maxLength={3} pattern="[A-Za-z]{3}" title="Enter a three-letter currency code such as CAD" disabled={optionCurrencyLocked} value={editor.currency} onChange={(event) => { const currency = currencyCode(event.target.value); setEditor({ ...editor, currency, fx: fxAfterCurrencyChange(editor.currency, currency, plan.baseCurrency, editor.fx) }); }} /></label>
-                <label><span>Conversion ratio<small>{editor.currency === plan.baseCurrency ? "Same currency, so the ratio is always 1" : `1 ${editor.currency || "option currency"} = how many ${plan.baseCurrency}?`}</small></span><input aria-label="Conversion ratio" required min="0.00000001" step="any" type="number" disabled={editor.currency === plan.baseCurrency} value={editor.fx.rateToBase} onChange={(event) => updateEditor("fx", { ...editor.fx, rateToBase: Number(event.target.value) })} /></label>
+                <label className="wide"><span>Place, job, or plan name</span><input required maxLength={160} placeholder="For example: Current household" value={editor.label} onChange={(event) => updateEditor("label", event.target.value)} /></label>
+                <label className="wide"><span>Place or location</span><input required maxLength={240} placeholder="City and country" value={editor.location} onChange={(event) => updateEditor("location", event.target.value)} /></label>
+                <label className="wide"><span>Who earns income in this plan</span><input required maxLength={500} placeholder="State whose income is included in this monthly plan" value={editor.employment} onChange={(event) => updateEditor("employment", event.target.value)} /></label>
+                <label><span>Plan stage</span><input required maxLength={120} placeholder="Current, offer, or planning case" value={editor.status} onChange={(event) => updateEditor("status", event.target.value)} /></label>
+                <label><span>Flag country code<small>Use exactly two uppercase letters, for example US.</small></span><input required minLength={2} maxLength={2} pattern="[A-Z]{2}" title="Enter exactly two uppercase letters, for example US" placeholder="US" value={editor.flag} onChange={(event) => updateEditor("flag", event.target.value.toUpperCase())} /></label>
+                <label><span>Number of earners counted in this plan<small>Count each person whose income is included in the monthly amounts.</small></span><input required min="0" max="20" step="1" type="number" placeholder="Enter 0, 1, 2…" value={earnersInputDraft ?? ""} onChange={(event) => setEarnersInputDraft(event.target.value)} /></label>
+                <label><span>Currency used in this place, job, or plan<small>{optionCurrencyLocked ? "Locked so saved monthly amounts cannot change meaning. Add another place, job, or plan to use another currency." : "Choose before entering monthly income or costs. This local currency is converted to the home currency for all charts and totals."}</small></span><input required minLength={3} maxLength={3} pattern="[A-Za-z]{3}" title="Enter a three-letter currency code such as CAD" disabled={optionCurrencyLocked} value={editor.currency} onChange={(event) => { const currency = currencyCode(event.target.value); setEditor({ ...editor, currency, fx: fxAfterCurrencyChange(editor.currency, currency, plan.baseCurrency, editor.fx) }); }} /></label>
+                <label><span>Currency conversion ratio<small>{editor.currency === plan.baseCurrency ? "No conversion needed because this is the home currency for all charts and totals." : `1 ${editor.currency || "plan currency"} = how many ${plan.baseCurrency}, the home currency that anchors all charts and totals?`}</small></span><input aria-label="Currency conversion ratio" required min="0.00000001" step="any" type="number" disabled={editor.currency === plan.baseCurrency} value={editor.fx.rateToBase} onChange={(event) => updateEditor("fx", { ...editor.fx, rateToBase: Number(event.target.value) })} /></label>
                 {editor.currency === plan.baseCurrency ? (
                   <>
-                    <div className="wide conversion-not-needed" role="note"><strong>No conversion required</strong><span>This option already uses the comparison currency. Optional reference details are preserved below when supplied.</span></div>
-                    <label><span>Optional reference date</span><input type="date" value={editor.fx.asOf ?? ""} onChange={(event) => updateEditor("fx", { ...editor.fx, asOf: event.target.value || null })} /></label>
-                    <label className="wide"><span>Optional currency note or source</span><input maxLength={500} placeholder="Optional note retained with this option" value={editor.fx.source} onChange={(event) => updateEditor("fx", { ...editor.fx, source: event.target.value })} /></label>
+                    <div className="wide conversion-not-needed" role="note"><strong>No conversion needed</strong><span>This place, job, or plan already uses the home currency that anchors all charts and totals. The conversion ratio is fixed at 1 and no conversion source is required.</span></div>
+                    <label><span>Optional currency reference date</span><input type="date" value={editor.fx.asOf ?? ""} onChange={(event) => updateEditor("fx", { ...editor.fx, asOf: event.target.value || null })} /></label>
+                    <label className="wide"><span>Optional currency note</span><input maxLength={500} placeholder="Optional note about this currency choice" value={editor.fx.source === "Base currency" ? "" : editor.fx.source} onChange={(event) => updateEditor("fx", { ...editor.fx, source: event.target.value })} /></label>
                   </>
                 ) : (
                   <>
-                    <label><span>Conversion date · required</span><input required type="date" value={editor.fx.asOf ?? ""} onChange={(event) => updateEditor("fx", { ...editor.fx, asOf: event.target.value || null })} /></label>
-                    <label className="wide"><span>Conversion source · required</span><input required maxLength={500} placeholder="Official rate, bank quote, or dated estimate" value={editor.fx.source} onChange={(event) => updateEditor("fx", { ...editor.fx, source: event.target.value })} /></label>
+                    <label><span>Conversion date checked · required</span><input required type="date" value={editor.fx.asOf ?? ""} onChange={(event) => updateEditor("fx", { ...editor.fx, asOf: event.target.value || null })} /></label>
+                    <label className="wide"><span>Where this conversion figure came from · required</span><input required maxLength={500} placeholder="Official rate, bank quote, or dated estimate" value={editor.fx.source} onChange={(event) => updateEditor("fx", { ...editor.fx, source: event.target.value })} /></label>
                   </>
                 )}
               </div>
               <CurrencyAmountEditor
                 key={`gross-${editor.currency}-${plan.baseCurrency}`}
                 id="gross-monthly"
-                label="Monthly gross compensation"
-                description="Before deductions; include only salary and benefits counted here."
+                label="Monthly gross income before tax and deductions"
+                description="Enter the monthly salary and benefits counted here before tax, other deductions, or payroll saving."
                 localAmount={editor.grossMonthly}
                 localCurrency={editor.currency}
                 baseCurrency={plan.baseCurrency}
@@ -2712,7 +2922,7 @@ export default function Home() {
                 entered={enteredScenarioAmounts.has("grossMonthly")}
                 onChangeLocal={updateEditorGross}
               />
-              <EvidenceEditor evidence={editor.evidence.grossMonthly ?? createUnknownEvidence()} onChange={(evidence) => updateEditorEvidence("grossMonthly", evidence)} title="Gross compensation accuracy and source" />
+              <EvidenceEditor evidence={editor.evidence.grossMonthly ?? createUnknownEvidence()} onChange={(evidence) => updateEditorEvidence("grossMonthly", evidence)} title="How reliable is this gross-income number?" />
             </fieldset>
 
             {(Object.keys(groupMeta) as FieldGroup[]).map((group) => {
@@ -2724,9 +2934,9 @@ export default function Home() {
               const groupTotal = enteredFields.reduce((total, field) => total + (editor.values[field.id] ?? 0), 0);
               const sectionSummary = fields.length
                 ? blankFields.length
-                  ? `${fields.length} monthly ${fields.length === 1 ? "item" : "items"} · ${enteredFields.length} entered${sharedFields.length ? ` · ${sharedFields.length} shared` : ""}`
-                  : `${fields.length} monthly ${fields.length === 1 ? "item" : "items"} · ${formatMoney(groupTotal, editor.currency, plan.locale)}${sharedFields.length ? ` · ${sharedFields.length} shared` : ""}`
-                : `${sharedFields.length} shared monthly ${sharedFields.length === 1 ? "item" : "items"}`;
+                  ? `${fields.length} monthly ${fields.length === 1 ? "item" : "items"} · ${enteredFields.length} entered${sharedFields.length ? ` · ${sharedFields.length} entered once for every plan` : ""}`
+                  : `${fields.length} monthly ${fields.length === 1 ? "item" : "items"} · ${formatMoney(groupTotal, editor.currency, plan.locale)}${sharedFields.length ? ` · ${sharedFields.length} entered once for every plan` : ""}`
+                : `${sharedFields.length} monthly ${sharedFields.length === 1 ? "item" : "items"} entered once for every plan`;
               return (
                 <EditorSection
                   key={group}
@@ -2765,8 +2975,8 @@ export default function Home() {
                   )}
                   {sharedFields.length > 0 && (
                     <div className="shared-preview-list">
-                      <strong>Applied automatically from Shared settings</strong>
-                      <small>These are stored once in {plan.baseCurrency}. The {editor.currency} amount below is the linked local equivalent.</small>
+                      <strong>Monthly amount entered once for every plan</strong>
+                      <small>Stored once in the {plan.baseCurrency} home currency; the {editor.currency} amount below is the linked local equivalent.</small>
                       {sharedFields.map((field) => {
                         const baseAmount = plan.sharedValues[field.id] ?? 0;
                         const localAmount = baseToLocalAmount(baseAmount, editor.currency === plan.baseCurrency ? 1 : editor.fx.rateToBase);
@@ -2779,54 +2989,67 @@ export default function Home() {
             })}
 
             {!editorConversionReady && editor.currency !== plan.baseCurrency && (
-              <div className="conversion-required" role="status">Enter a valid three-letter currency, conversion ratio, date, and source to see comparison totals. This option cannot be added until they are complete.</div>
+              <div className="conversion-required" role="status">Enter a valid three-letter currency, conversion ratio, date checked, and source to see charts and totals in the home currency that anchors all charts and totals. This place, job, or plan cannot be added until they are complete.</div>
             )}
             {!editorAmountsReady && (
-              <div className="conversion-required" role="status">Enter gross compensation and every monthly item before saving. Enter 0 when an item does not apply, or use the section’s Use 0 action. Totals stay hidden until every amount is confirmed.</div>
+              <div className="conversion-required" role="status">Enter monthly gross income before tax and deductions, plus every monthly item, before saving. Enter 0 when an item does not apply, or use the section’s Use 0 action. Charts and totals stay hidden until every amount is confirmed.</div>
             )}
-            {editorPreview && (
+            {editorPreview && editorPreviewSavings && (
               <div className="editor-preview savings-preview" aria-live="polite">
-                <div><span>Gross compensation</span><strong>{formatMoney(editorPreview.grossMonthly, editor.currency, plan.locale)}</strong><small>{formatMoney(editorPreview.grossBase, plan.baseCurrency, plan.locale)}</small></div>
-                <div><span>Net cash income</span><strong>{formatMoney(editorPreview.netCashMonthly, editor.currency, plan.locale)}</strong><small>{formatMoney(editorPreview.netCashBase, plan.baseCurrency, plan.locale)}</small></div>
-                <div className="preview-parent"><span>Total saving</span><strong>{formatMoney(editorPreview.totalSavingBase, plan.baseCurrency, plan.locale)}</strong><small>Investments {formatMoney(editorPreview.totalInvestmentBase, plan.baseCurrency, plan.locale)} + cash {formatMoney(editorPreview.cashRemainingBase, plan.baseCurrency, plan.locale)}</small></div>
+                <div><span>Monthly gross income before tax and deductions</span><strong>{formatMoney(editorPreview.grossMonthly, editor.currency, plan.locale)}</strong><small>{formatMoney(editorPreview.grossBase, plan.baseCurrency, plan.locale)}</small></div>
+                <div><span>Take-home cash</span><strong>{formatMoney(editorPreview.netCashMonthly, editor.currency, plan.locale)}</strong><small>{formatMoney(editorPreview.netCashBase, plan.baseCurrency, plan.locale)}</small></div>
+                <div className="preview-parent"><span>Total saved or left each month</span><strong>{formatMoney(editorPreviewSavings.local.total, editor.currency, plan.locale)}</strong><small>{formatMoney(editorPreviewSavings.base.total, plan.baseCurrency, plan.locale)}</small><small>Monthly investments {formatMoney(editorPreviewSavings.local.investments, editor.currency, plan.locale)} / {formatMoney(editorPreviewSavings.base.investments, plan.baseCurrency, plan.locale)} + cash left {formatMoney(editorPreviewSavings.local.cash, editor.currency, plan.locale)} / {formatMoney(editorPreviewSavings.base.cash, plan.baseCurrency, plan.locale)}</small></div>
               </div>
             )}
 
             <details className="editor-details">
               <summary>Card appearance <span>Optional</span></summary>
               <div className="form-grid">
-                <label><span>Card colour</span><input className="color-input" type="color" value={editor.color} onChange={(event) => updateEditor("color", event.target.value)} /></label>
+                <label><span>Choose a card colour visually</span><input aria-label="Choose a card colour visually" className="color-input" type="color" value={editor.color} onChange={(event) => updateEditor("color", event.target.value)} /></label>
+                <label><span>Exact card colour code<small>Six hexadecimal digits, for example #2F80ED.</small></span><input aria-label="Exact card colour code" maxLength={7} pattern="#[0-9A-Fa-f]{6}" placeholder="#2F80ED" value={editor.color} onChange={(event) => updateEditor("color", event.target.value)} /></label>
               </div>
             </details>
 
             <details className="editor-details">
-              <summary>Qualitative assumptions <span>Preserved in comparisons and exports</span></summary>
+              <summary>Important non-financial details <span>Saved in this place, job, or plan and in downloaded files</span></summary>
               <div className="form-grid">
-                <label className="wide"><span>Spouse income assumption</span><input maxLength={1000} placeholder="For example: not included until a job is secured" value={editor.spouseJob} onChange={(event) => updateEditor("spouseJob", event.target.value)} /></label>
-                <label className="wide"><span>Childcare assumption</span><input maxLength={1000} placeholder="Who provides care and what cost is included?" value={editor.childcare} onChange={(event) => updateEditor("childcare", event.target.value)} /></label>
-                <label className="wide"><span>Transport assumption</span><input maxLength={1000} placeholder="Public transport, car, or a mix" value={editor.transport} onChange={(event) => updateEditor("transport", event.target.value)} /></label>
-                <label className="wide"><span>Residence / visa assumption</span><input maxLength={1000} placeholder="Visa status, timing, or residency condition" value={editor.residency} onChange={(event) => updateEditor("residency", event.target.value)} /></label>
-                <label className="wide"><span>Bonus treatment<small>Excluded unless converted into recurring monthly inputs</small></span><input maxLength={1000} placeholder="State whether and how bonus is counted" value={editor.bonus} onChange={(event) => updateEditor("bonus", event.target.value)} /></label>
-                <label className="wide"><span>Benefits included or confirmed · one per line<small>Up to 50 lines; 1,000 characters per line</small></span><textarea rows={3} maxLength={50049} value={editor.benefits.join("\n")} onChange={(event) => updateEditor("benefits", event.target.value.split("\n").filter((line) => line.length > 0))} /></label>
-                <label className="wide"><span>Important uncertainties · one per line<small>Up to 50 lines; 1,000 characters per line</small></span><textarea rows={3} maxLength={50049} value={editor.risks.join("\n")} onChange={(event) => updateEditor("risks", event.target.value.split("\n").filter((line) => line.length > 0))} /></label>
+                <label className="wide"><span>Partner income included in this plan</span><input maxLength={1000} placeholder="For example: not included until a job is secured" value={editor.spouseJob} onChange={(event) => updateEditor("spouseJob", event.target.value)} /></label>
+                <label className="wide"><span>Childcare arrangement and monthly cost included</span><input maxLength={1000} placeholder="Who provides care and what monthly cost is included?" value={editor.childcare} onChange={(event) => updateEditor("childcare", event.target.value)} /></label>
+                <label className="wide"><span>Transport choice and monthly cost included</span><input maxLength={1000} placeholder="Public transport, car, or a mix" value={editor.transport} onChange={(event) => updateEditor("transport", event.target.value)} /></label>
+                <label className="wide"><span>Residence or visa condition</span><input maxLength={1000} placeholder="Visa status, timing, or residency condition" value={editor.residency} onChange={(event) => updateEditor("residency", event.target.value)} /></label>
+                <label className="wide"><span>Bonus or one-time payment treatment<small>Excluded unless you convert it into a recurring monthly amount above.</small></span><input maxLength={1000} placeholder="State whether and how this is counted" value={editor.bonus} onChange={(event) => updateEditor("bonus", event.target.value)} /></label>
+                <label className="wide"><span>Benefits included in this plan · one per line<small>Up to 50 lines; 1,000 characters per line</small></span><textarea rows={3} maxLength={50049} value={editor.benefits.join("\n")} onChange={(event) => updateEditor("benefits", event.target.value.split("\n").filter((line) => line.length > 0))} /></label>
+                <label className="wide"><span>Important details still to verify · one per line<small>Up to 50 lines; 1,000 characters per line</small></span><textarea rows={3} maxLength={50049} value={editor.risks.join("\n")} onChange={(event) => updateEditor("risks", event.target.value.split("\n").filter((line) => line.length > 0))} /></label>
               </div>
             </details>
 
             {deleteScenarioConfirm && (
               <div className="inline-danger" role="alert">
-                <div><strong>Remove this option from this browser?</strong><span>{legacyRepairScenarios.length > 0 ? "No reusable backup is available until every older option has a real conversion date and source. Removing now cannot be undone." : "This cannot be undone unless you downloaded a backup."}</span></div>
+                <div>
+                  <strong>{editingCurrentScenario ? "Remove the current job and home-country household position?" : "Remove this place, job, or plan from this browser?"}</strong>
+                  <span>{editingCurrentScenario
+                    ? currentReplacementScenarios.length
+                      ? "Choose which saved plan becomes your current job and home-country household position before removal. This replacement changes the current-position label only; it does not change monthly amounts."
+                      : "This is the only saved plan. Removing it leaves no current job and home-country household position."
+                    : legacyRepairScenarios.length > 0
+                      ? "No reusable backup is available until every older saved plan has a real conversion date and source. Removing now cannot be undone."
+                      : "This cannot be undone unless you downloaded a backup."}</span>
+                  {editingCurrentScenario && currentReplacementScenarios.length > 0 && (
+                    <label className="wide"><span>Current job and home-country position after removal</span><select required value={deleteCurrentReplacementId ?? ""} onChange={(event) => { setDeleteCurrentReplacementId(event.target.value || null); setFormNotice(""); setFormIssues([]); }}><option value="">Choose the replacement current position</option>{currentReplacementScenarios.map((scenario) => <option key={scenario.id} value={scenario.id}>{scenario.label || "Unnamed place, job, or plan"}</option>)}</select></label>
+                  )}
+                </div>
                 <div className="inline-danger-actions">
                   <button type="button" className="button ghost" disabled={legacyRepairScenarios.length > 0} onClick={exportDocument}>{legacyRepairScenarios.length > 0 ? "Reusable backup unavailable" : "Download saved backup"}</button>
-                  <button type="button" className="button ghost" onClick={() => setDeleteScenarioConfirm(false)}>Cancel</button>
-                  <button type="button" className="button danger" onClick={deleteScenario}>{legacyRepairScenarios.length > 0 ? "Remove without reusable backup" : "Confirm removal"}</button>
+                  <button type="button" className="button ghost" onClick={() => { setDeleteScenarioConfirm(false); setDeleteCurrentReplacementId(null); }}>Cancel</button>
+                  <button type="button" className="button danger" disabled={editingCurrentScenario && currentReplacementScenarios.length > 0 && !deleteCurrentReplacementId} onClick={deleteScenario}>{legacyRepairScenarios.length > 0 ? "Remove without reusable backup" : "Confirm removal"}</button>
                 </div>
               </div>
             )}
             <div className="modal-actions">
-              {editingExisting && <button type="button" className="button danger" onClick={() => setDeleteScenarioConfirm(true)}>Remove option</button>}
+              {editingExisting && <button type="button" className="button danger" onClick={() => { setDeleteCurrentReplacementId(null); setDeleteScenarioConfirm(true); }}>Remove this place, job, or plan</button>}
               <span />
               <button type="button" className="button ghost" onClick={() => setEditor(null)}>Cancel</button>
-              <button type="submit" className="button primary">{firstScenarioSetup ? "Save current situation" : editingExisting ? "Save changes" : "Add option"}</button>
+              <button type="submit" className="button primary">{firstScenarioSetup ? "Save your current job and home-country household position" : editingCurrentScenario ? "Save changes to your current job and home-country household position" : editingExisting ? "Save changes to this place, job, or plan" : "Add this possible job, move, or household plan"}</button>
             </div>
           </form>
         </div>
@@ -2837,10 +3060,22 @@ export default function Home() {
           <button className="modal-dismiss" type="button" tabIndex={-1} aria-label="Close import preview" onClick={() => setImportCandidate(null)} />
           <section className="share-modal import-modal" role="dialog" aria-modal="true" aria-labelledby="import-title" data-dialog-id="import-preview" tabIndex={-1}>
             <div className="modal-head"><div><span className="section-kicker">Check before replacing</span><h2 id="import-title">Replace this browser’s complete comparison?</h2></div><button className="close-button" onClick={() => setImportCandidate(null)} aria-label="Close import preview">×</button></div>
-            <div className="import-summary"><div><span>Title</span><strong>{importCandidate.document.title}</strong></div><div><span>Comparison currency</span><strong>{importCandidate.document.baseCurrency}</strong></div><div><span>Options</span><strong>{importCandidate.document.scenarios.length}</strong></div><div><span>Sources</span><strong>{importCandidate.document.researchItems.length}</strong></div></div>
-            {importCandidate.migrated && <p className="migration-warning">This older Wayfinder file was migrated without changing its stored totals. Review migration notes and sources after import.</p>}
-            <p className="modal-intro">This complete comparison file includes and replaces shared settings, your current situation, all options, assumptions, evidence, and sources. Nothing changes until you confirm; it replaces everything, with no partial merge.</p>
-            {legacyRepairScenarios.length > 0 && <p className="modal-intro"><strong>The current comparison cannot produce a reusable backup until every older option has a real conversion date and source.</strong> Replacing it now permanently removes those unrepaired options from this browser.</p>}
+            <div className="import-summary"><div><span>Comparison title</span><strong>{importCandidate.document.title}</strong></div><div><span>Home currency for all charts and totals</span><strong>{importCandidate.document.baseCurrency}</strong></div><div><span>Current job and home-country position</span><strong>{importCandidate.document.scenarios.find((scenario) => scenario.id === importCandidate.document.currentScenarioId)?.label || "Not set"}</strong></div><div><span>Places, jobs, and plans</span><strong>{importCandidate.document.scenarios.length}</strong></div><div><span>Research sources</span><strong>{importCandidate.document.researchItems.length}</strong></div></div>
+            {importCandidate.migrated && <p className="migration-warning">This older Wayfinder file was updated without changing its stored totals. Its first saved plan was selected as the current job and home-country position; you can change it after importing in Home currency, future estimates, and amounts used in every plan. After importing, use the clearly labelled older saved plans panel to complete any missing currency conversion dates or sources.</p>}
+            {importCandidate.document.legacyMigrationNotes.length > 0 && (
+              <EditorSection
+                title="Notes kept from an older file"
+                summary={`${importCandidate.document.legacyMigrationNotes.length} ${importCandidate.document.legacyMigrationNotes.length === 1 ? "note" : "notes"}`}
+                note="These notes never affect calculations and are excluded from the family report. They are kept only as read-only context from an earlier file."
+                collapsible
+              >
+                <ul className="legacy-migration-notes">
+                  {importCandidate.document.legacyMigrationNotes.map((note, index) => <li key={`${note}-${index}`}>{note}</li>)}
+                </ul>
+              </EditorSection>
+            )}
+            <p className="modal-intro">This saved comparison file includes and replaces your home currency, future estimates, amounts used in every plan, current job and home-country position, possible plans, source confidence, and sources. Nothing changes until you confirm; it replaces everything, with no partial merge.</p>
+            {legacyRepairScenarios.length > 0 && <p className="modal-intro"><strong>The current comparison cannot produce a reusable backup until every older saved plan has a real conversion date and source.</strong> Replacing it now permanently removes those unrepaired plans from this browser.</p>}
             <div className="modal-actions"><button className="button ghost" disabled={legacyRepairScenarios.length > 0} onClick={exportDocument}>{legacyRepairScenarios.length > 0 ? "Reusable backup unavailable" : "Download current backup first"}</button><span /><button className="button ghost" onClick={() => setImportCandidate(null)}>Cancel</button><button className="button primary" onClick={confirmImport}>{legacyRepairScenarios.length > 0 ? "Replace without reusable backup" : "Replace complete comparison"}</button></div>
           </section>
         </div>
@@ -2863,9 +3098,9 @@ export default function Home() {
           <button className="modal-dismiss" type="button" tabIndex={-1} aria-label="Cancel clearing browser data" onClick={cancelClearDashboard} />
           <section className="share-modal confirm-modal" role="dialog" aria-modal="true" aria-labelledby="clear-title" data-dialog-id="clear-browser" tabIndex={-1}>
             <div className="modal-head"><div><span className="section-kicker">Local data deletion</span><h2 id="clear-title">Clear this browser?</h2></div><button className="close-button" onClick={cancelClearDashboard} aria-label="Cancel clearing browser data">×</button></div>
-            <p className="modal-intro">This removes shared settings, every option, excluded-support notes, sources, and any local recovery copy from this browser. The public application repository is unaffected.</p>
-            {currencyRestartDraft && <p className="modal-intro">Your open Shared settings edits are preserved here. Cancel returns to them. Download the draft before clearing if you want a copy.</p>}
-            {legacyRepairScenarios.length > 0 && <p className="modal-intro"><strong>No reusable backup can be created yet.</strong> Cancel and complete the older options’ conversion date and source first. Clearing now permanently removes those options from this browser.</p>}
+            <p className="modal-intro">This removes the home currency, future estimates, amounts used in every plan, every place, job, or plan, excluded-support notes, sources, and any local recovery copy from this browser. The public application repository is unaffected.</p>
+            {currencyRestartDraft && <p className="modal-intro">Your open home-currency, future-estimate, and every-plan-amount edits are preserved here. Cancel returns to them. Download the draft before clearing if you want a copy.</p>}
+            {legacyRepairScenarios.length > 0 && <p className="modal-intro"><strong>No reusable backup can be created yet.</strong> Cancel and complete the older saved plans’ conversion date and source first. Clearing now permanently removes those plans from this browser.</p>}
             <div className="modal-actions"><button className="button ghost" disabled={legacyRepairScenarios.length > 0} onClick={exportClearBackup}>{currencyRestartDraft ? "Download draft backup" : "Download backup first"}</button><span /><button className="button ghost" onClick={cancelClearDashboard}>Cancel</button><button className="button danger" onClick={clearDashboard}>{legacyRepairScenarios.length > 0 ? "Clear without a reusable backup" : "Clear all local data"}</button></div>
           </section>
         </div>

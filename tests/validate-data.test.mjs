@@ -79,7 +79,7 @@ test("CLI retains supported legacy migration before schema validation", async ()
   const legacy = {
     scenarios: [{
       id: "legacy-one",
-      flag: "OLD",
+      flag: "EX",
       label: "Legacy illustration",
       location: "Old Example",
       employment: "Illustrative role",
@@ -101,7 +101,7 @@ test("CLI retains supported legacy migration before schema validation", async ()
     assert.equal(stderr, "");
     const output = JSON.parse(stdout);
     assert.equal(output.ok, true);
-    assert.equal(output.schemaVersion, 4);
+    assert.equal(output.schemaVersion, 5);
     assert.equal(output.migrated, true);
   } finally {
     await rm(temporary.directory, { recursive: true, force: true });

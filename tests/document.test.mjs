@@ -24,7 +24,11 @@ register(
   import.meta.url,
 );
 
-const { parseWayfinderDocument, validateWayfinderDocument } = await import("../app/document.ts");
+const {
+  isLegacyUndatedConversion,
+  parseWayfinderDocument,
+  validateWayfinderDocument,
+} = await import("../app/document.ts");
 const { createCurrentScenario, createWayfinderDocument } = await import("../app/scenarios.ts");
 const execFile = promisify(execFileCallback);
 
@@ -49,7 +53,28 @@ function currentDocument() {
   scenario.employment = "One fictional income";
   scenario.status = "Current test";
   document.scenarios = [scenario];
+  document.currentScenarioId = scenario.id;
   return document;
+}
+
+function legacyScenario(overrides = {}) {
+  return {
+    id: "legacy-one",
+    flag: "EX",
+    label: "Legacy illustration",
+    location: "Old Example",
+    employment: "Illustrative role",
+    status: "Legacy",
+    currency: "INR",
+    fxToInr: 1,
+    grossMonthly: 1000,
+    netMonthly: 800,
+    localLiving: 300,
+    indiaCommitments: 100,
+    investmentTarget: 200,
+    earners: 1,
+    ...overrides,
+  };
 }
 
 async function example(name) {
@@ -58,7 +83,7 @@ async function example(name) {
   );
 }
 
-test("validates the current v4 document shape and both public-safe examples", async () => {
+test("validates the current v5 document shape and both public-safe examples", async () => {
   const result = validateWayfinderDocument(currentDocument());
   assert.equal(result.ok, true);
 
@@ -73,6 +98,37 @@ test("validates the current v4 document shape and both public-safe examples", as
       assert.deepEqual(fixture.excludedSupport, []);
     }
   }
+});
+
+test("requires a current-position reference only when options exist", () => {
+  const empty = createWayfinderDocument("USD");
+  assert.equal(empty.currentScenarioId, null);
+  assert.equal(validateWayfinderDocument(empty).ok, true);
+
+  const missing = currentDocument();
+  delete missing.currentScenarioId;
+  const missingResult = validateWayfinderDocument(missing);
+  assert.equal(missingResult.ok, false);
+  assert.ok(missingResult.issues.some((issue) => issue.path === "$.currentScenarioId"));
+
+  const unknown = currentDocument();
+  unknown.currentScenarioId = "option-not-saved";
+  const unknownResult = validateWayfinderDocument(unknown);
+  assert.equal(unknownResult.ok, false);
+  assert.ok(unknownResult.issues.some((issue) => (
+    issue.path === "$.currentScenarioId"
+    && issue.message.includes("saved place, job, or plan")
+  )));
+
+  const mismatched = currentDocument();
+  mismatched.currentScenarioId = null;
+  const mismatchedResult = validateWayfinderDocument(mismatched);
+  assert.equal(mismatchedResult.ok, false);
+  assert.ok(mismatchedResult.issues.some((issue) => issue.path === "$.currentScenarioId"));
+
+  const nonNullEmpty = createWayfinderDocument("USD");
+  nonNullEmpty.currentScenarioId = "option-current";
+  assert.equal(validateWayfinderDocument(nonNullEmpty).ok, false);
 });
 
 test("rejects explicitly unsupported kinds or schemas and calculated or otherwise unknown fields", () => {
@@ -317,31 +373,77 @@ test("enforces base FX and prevents deductions plus automatic saving from exceed
   assert.ok(payResult.issues.some((issue) => issue.message.includes("cannot exceed gross income")));
 });
 
-test("migrates a valid legacy backup into a valid v4 document", () => {
+test("migrates a valid legacy backup into a valid v5 document", () => {
   const legacy = {
-    scenarios: [{
-      id: "legacy-one",
-      flag: "OLD",
-      label: "Legacy illustration",
-      location: "Old Example",
-      employment: "Illustrative role",
-      status: "Legacy",
-      currency: "INR",
-      fxToInr: 1,
-      grossMonthly: 1000,
-      netMonthly: 800,
-      localLiving: 300,
-      indiaCommitments: 100,
-      investmentTarget: 200,
-      earners: 1,
-    }],
+    scenarios: [legacyScenario()],
   };
   const result = parseWayfinderDocument(legacy);
   assert.equal(result.ok, true);
   assert.equal(result.migrated, true);
-  assert.equal(result.document.schemaVersion, 4);
-  assert.equal(result.document.scenarios[0].values["deduction-income-tax"], 200);
+  assert.equal(result.document.schemaVersion, 5);
+  const [scenario] = result.document.scenarios;
+  assert.equal(scenario.values["legacy-gross-net-difference"], 200);
+  assert.equal(scenario.values["legacy-aggregate-living"], 300);
+  assert.equal(scenario.values["legacy-option-commitments"], 100);
+  assert.equal(scenario.values["legacy-option-investment"], 200);
+  assert.equal(scenario.values["deduction-income-tax"], 0);
+  assert.equal(scenario.values["living-leisure"], 0);
+  assert.equal(result.document.currentScenarioId, "legacy-one");
+  assert.equal(scenario.fx.source, "");
+  assert.equal(scenario.earners, 1);
+  assert.deepEqual(
+    [scenario.spouseJob, scenario.childcare, scenario.transport, scenario.residency, scenario.bonus],
+    ["", "", "", "", ""],
+  );
+  assert.deepEqual(scenario.benefits, []);
+  assert.deepEqual(scenario.risks, []);
+  assert.deepEqual(result.document.migrationNotes, [
+    "Legacy option-level commitments and investment targets were preserved for review; shared scope was not recorded.",
+    "Legacy gross-to-net differences and aggregate living amounts were preserved in neutral review fields; original categories were not recorded.",
+  ]);
+  for (const evidence of Object.values(scenario.evidence)) {
+    assert.deepEqual(evidence, unknownEvidence);
+  }
   assert.equal(validateWayfinderDocument(result.document).ok, true);
+});
+
+test("rejects invalid legacy identity, currency, earner, and qualitative types", () => {
+  const invalidCases = [
+    ["id", "legacy identity must be valid", "id"],
+    ["currency", "inr", "currency"],
+    ["earners", 1.5, "earners"],
+    ["spouseJob", 42, "spouseJob"],
+    ["benefits", ["Recorded benefit", 42], "benefits[1]"],
+  ];
+
+  for (const [key, value, pathSuffix] of invalidCases) {
+    const result = parseWayfinderDocument({
+      scenarios: [legacyScenario({ [key]: value })],
+    });
+    assert.equal(result.ok, false, key);
+    assert.ok(result.issues.some((issue) => issue.path.endsWith(pathSuffix)), key);
+  }
+
+  const missingEarner = legacyScenario();
+  delete missingEarner.earners;
+  const missingEarnerResult = parseWayfinderDocument({ scenarios: [missingEarner] });
+  assert.equal(missingEarnerResult.ok, false);
+  assert.ok(missingEarnerResult.issues.some((issue) => (
+    issue.path.endsWith("earners")
+    && issue.message === "Missing required legacy field."
+  )));
+});
+
+test("rejects caller-authored migration notes", () => {
+  const document = currentDocument();
+  document.migrationNotes = ["An agent says this migration is complete."];
+
+  const result = validateWayfinderDocument(document);
+  assert.equal(result.ok, false);
+  assert.ok(result.issues.some((issue) => (
+    issue.path === "$.migrationNotes[0]"
+    && issue.message.includes("system-generated legacy provenance")
+  )));
 });
 
 test("accepts only the recognized legacy signature and rejects undated non-base conversions", () => {
@@ -349,59 +451,41 @@ test("accepts only the recognized legacy signature and rejects undated non-base 
   assert.equal(unrelated.ok, false);
 
   const unknownLegacyField = parseWayfinderDocument({
-    scenarios: [{
+    scenarios: [legacyScenario({
       currency: "CAD",
       fxToInr: 60,
-      grossMonthly: 1000,
-      netMonthly: 800,
-      localLiving: 300,
-      indiaCommitments: 100,
-      investmentTarget: 200,
       discardedByOldImporter: "must not be ignored",
-    }],
+    })],
   });
   assert.equal(unknownLegacyField.ok, false);
   assert.ok(unknownLegacyField.issues.some((issue) => issue.path.endsWith("discardedByOldImporter")));
 
   const unknownLegacyRootField = parseWayfinderDocument({
-    scenarios: [{
-      currency: "CAD",
-      fxToInr: 60,
-      grossMonthly: 1000,
-      netMonthly: 800,
-      localLiving: 300,
-      indiaCommitments: 100,
-      investmentTarget: 200,
-    }],
+    scenarios: [legacyScenario({ currency: "CAD", fxToInr: 60 })],
     discardedRootByOldImporter: true,
   });
   assert.equal(unknownLegacyRootField.ok, false);
   assert.ok(unknownLegacyRootField.issues.some((issue) => issue.path.endsWith("discardedRootByOldImporter")));
 
-  const migratedNonBase = parseWayfinderDocument([{
-    currency: "CAD",
-    fxToInr: 60,
-    grossMonthly: 1000,
-    netMonthly: 800,
-    localLiving: 300,
-    indiaCommitments: 100,
-    investmentTarget: 200,
-  }]);
+  const migratedNonBase = parseWayfinderDocument([
+    legacyScenario({ currency: "CAD", fxToInr: 60 }),
+  ]);
   assert.equal(migratedNonBase.ok, false);
   assert.ok(migratedNonBase.issues.some((issue) =>
     issue.path.endsWith("fx.asOf") && issue.message.includes("conversion date"),
   ));
 
-  const recoverableStoredMigration = parseWayfinderDocument([{
-    currency: "CAD",
-    fxToInr: 60,
-    grossMonthly: 1000,
-    netMonthly: 800,
-    localLiving: 300,
-    indiaCommitments: 100,
-    investmentTarget: 200,
-  }], { allowLegacyConversionGap: true });
+  const recoverableStoredMigration = parseWayfinderDocument([
+    legacyScenario({ currency: "CAD", fxToInr: 60 }),
+  ], { allowLegacyConversionGap: true });
   assert.equal(recoverableStoredMigration.ok, true);
+  assert.equal(
+    isLegacyUndatedConversion(
+      recoverableStoredMigration.document,
+      recoverableStoredMigration.document.scenarios[0],
+    ),
+    true,
+  );
   assert.equal(
     validateWayfinderDocument(recoverableStoredMigration.document).ok,
     false,
@@ -422,6 +506,18 @@ test("accepts only the recognized legacy signature and rejects undated non-base 
   assert.ok(datedResult.issues.some((issue) =>
     issue.path.endsWith("fx.source") && issue.message.includes("real conversion source"),
   ));
+
+  const repaired = structuredClone(recoverableStoredMigration.document);
+  repaired.scenarios[0].fx = {
+    rateToBase: 0.74,
+    asOf: "2026-08-17",
+    source: "Illustrative official FX reference",
+  };
+  assert.equal(isLegacyUndatedConversion(repaired, repaired.scenarios[0]), false);
+  assert.equal(validateWayfinderDocument(repaired).ok, true);
+  const roundTrip = parseWayfinderDocument(JSON.parse(JSON.stringify(repaired)));
+  assert.equal(roundTrip.ok, true);
+  assert.equal(roundTrip.migrated, false);
 });
 
 test("limits import collection and keyed-map sizes", () => {
@@ -440,10 +536,72 @@ test("limits import collection and keyed-map sizes", () => {
   assert.ok(valuesResult.issues.some((issue) => issue.path.endsWith(".values") && issue.message.includes("at most 100 entries")));
 });
 
-test("preserves a v4 export through JSON export and parse", () => {
+test("preserves a v5 export through JSON export and parse", () => {
   const exported = JSON.stringify(currentDocument());
   const result = parseWayfinderDocument(JSON.parse(exported));
   assert.equal(result.ok, true);
   assert.equal(result.migrated, false);
   assert.equal(JSON.stringify(result.document), exported);
+});
+
+test("migrates a canonical v4 document losslessly and selects its first option", () => {
+  const v4 = currentDocument();
+  v4.schemaVersion = 4;
+  delete v4.currentScenarioId;
+  delete v4.legacyMigrationNotes;
+  const original = structuredClone(v4);
+
+  const result = parseWayfinderDocument(v4);
+  assert.equal(result.ok, true);
+  assert.equal(result.migrated, true);
+  assert.equal(result.document.schemaVersion, 5);
+  assert.equal(result.document.currentScenarioId, "option-current");
+
+  const { schemaVersion: originalVersion, ...originalFields } = original;
+  const {
+    schemaVersion: migratedVersion,
+    currentScenarioId,
+    legacyMigrationNotes,
+    ...migratedFields
+  } = result.document;
+  assert.equal(originalVersion, 4);
+  assert.equal(migratedVersion, 5);
+  assert.equal(currentScenarioId, "option-current");
+  assert.deepEqual(legacyMigrationNotes, []);
+  assert.deepEqual(migratedFields, originalFields);
+});
+
+test("preserves arbitrary released-v4 migration notes outside v5 system provenance", () => {
+  const v4 = currentDocument();
+  v4.schemaVersion = 4;
+  delete v4.currentScenarioId;
+  delete v4.legacyMigrationNotes;
+  v4.migrationNotes = [
+    "A historical note from an older dashboard export.",
+    "Another user-visible migration reminder.",
+  ];
+
+  const result = parseWayfinderDocument(v4);
+  assert.equal(result.ok, true);
+  assert.equal(result.migrated, true);
+  assert.deepEqual(result.document.legacyMigrationNotes, v4.migrationNotes);
+  assert.deepEqual(result.document.migrationNotes, [
+    "Migration notes from a v4 file were retained for review.",
+  ]);
+});
+
+test("requires repair instead of changing a historical v4 country badge", () => {
+  const v4 = currentDocument();
+  v4.schemaVersion = 4;
+  delete v4.currentScenarioId;
+  delete v4.legacyMigrationNotes;
+  v4.scenarios[0].flag = "OLD";
+
+  const result = parseWayfinderDocument(v4);
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.issues, [{
+    path: "$.scenarios[0].flag",
+    message: "This older country badge cannot be used as a two-letter country code. Replace it with the correct two-letter country code before importing; the original file is unchanged.",
+  }]);
+  assert.equal(v4.scenarios[0].flag, "OLD");
 });

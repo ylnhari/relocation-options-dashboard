@@ -1,6 +1,6 @@
 import vinext from "vinext";
-import { closeSync, fstatSync, openSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { closeSync, fstatSync, openSync, readSync, statSync } from "node:fs";
+import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { defineConfig } from "vite";
 import hostingConfig from "./.openai/hosting.json" with { type: "json" };
 import { sites } from "./build/sites-vite-plugin.ts";
@@ -14,6 +14,7 @@ const { d1, r2 } = hostingConfig;
 const isCodexSeatbeltSandbox = process.env.CODEX_SANDBOX === "seatbelt";
 const RUNTIME_SEED_ENABLED = process.env.WAYFINDER_RUNTIME_SEED_ENABLED === "1";
 const RUNTIME_SEED_ID = process.env.WAYFINDER_RUNTIME_SEED_ID;
+const RUNTIME_SEED_DIR = process.env.WAYFINDER_RUNTIME_SEED_DIR;
 const RUNTIME_SEED_ID_PATTERN = /^[A-Za-z0-9_-]{16,128}$/;
 const MAX_RUNTIME_SEED_BYTES = 2 * 1024 * 1024;
 
@@ -22,20 +23,41 @@ function runtimeSeedSource() {
   if (!RUNTIME_SEED_ID || !RUNTIME_SEED_ID_PATTERN.test(RUNTIME_SEED_ID)) {
     throw new Error("Wayfinder runtime seed is missing a valid local artifact identifier.");
   }
-  // The portable launcher is the only supported writer of this ignored file.
-  // It validates the exact bytes before enabling this child process.
-  const seedPath = resolve(
-    process.cwd(),
-    ".local",
-    `wayfinder-runtime-seed-${RUNTIME_SEED_ID}.json`,
-  );
+  if (!RUNTIME_SEED_DIR || !isAbsolute(RUNTIME_SEED_DIR)) {
+    throw new Error("Wayfinder runtime seed is missing a valid local artifact directory.");
+  }
+  // The portable launcher is the only supported writer. It passes a per-user
+  // runtime directory and validates the exact bytes before enabling this child.
+  const seedDirectory = resolve(RUNTIME_SEED_DIR);
+  if (!statSync(seedDirectory).isDirectory()) {
+    throw new Error("Wayfinder runtime seed directory is not available.");
+  }
+  const fromCheckout = relative(resolve(process.cwd()), seedDirectory);
+  if (
+    fromCheckout === ""
+    || (!fromCheckout.startsWith(`..${sep}`) && fromCheckout !== ".." && !isAbsolute(fromCheckout))
+  ) {
+    throw new Error("Wayfinder runtime seed directory must be outside the checkout.");
+  }
+  const seedPath = resolve(seedDirectory, `wayfinder-runtime-seed-${RUNTIME_SEED_ID}.json`);
+  if (dirname(seedPath) !== seedDirectory) {
+    throw new Error("Wayfinder runtime seed artifact path is not valid.");
+  }
   const handle = openSync(seedPath, "r");
   try {
     const details = fstatSync(handle);
     if (!details.isFile() || details.size > MAX_RUNTIME_SEED_BYTES) {
       throw new Error("Wayfinder runtime seed is not a bounded regular file.");
     }
-    return readFileSync(handle, "utf8");
+    const bytes = Buffer.alloc(details.size);
+    if (readSync(handle, bytes, 0, bytes.length, 0) !== details.size) {
+      throw new Error("Wayfinder runtime seed could not be read completely.");
+    }
+    const finalDetails = fstatSync(handle);
+    if (!finalDetails.isFile() || finalDetails.size !== details.size) {
+      throw new Error("Wayfinder runtime seed changed while it was read.");
+    }
+    return bytes.toString("utf8");
   } finally {
     closeSync(handle);
   }

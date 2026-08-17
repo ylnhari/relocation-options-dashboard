@@ -23,6 +23,7 @@ register(
 
 const { MAX_DOCUMENT_BYTES, validateWayfinderInput } = await import("../app/import-validator.ts");
 const { default: generatedSchemaValidator } = await import("../app/wayfinder-schema-validator.generated.mjs");
+const { default: generatedV4SchemaValidator } = await import("../app/wayfinder-v4-schema-validator.generated.mjs");
 
 async function exampleDocument() {
   return JSON.parse(
@@ -41,6 +42,72 @@ test("shared import validator rejects schema-only invalid HTTPS URLs", async () 
     issue.path.endsWith("sourceUrl")
     && issue.message.startsWith("Schema:")
   )));
+});
+
+test("shared import validator rejects caller-authored migration notes", async () => {
+  const document = await exampleDocument();
+  document.migrationNotes = ["An agent supplied this as a migration note."];
+
+  assert.equal(generatedSchemaValidator(document), false);
+  const result = validateWayfinderInput(document);
+  assert.equal(result.ok, false);
+  assert.ok(result.issues.some((issue) => issue.message.startsWith("Schema:")));
+});
+
+test("recognized v4 input is closed-schema validated before lossless migration to v5", async () => {
+  const v4 = await exampleDocument();
+  v4.schemaVersion = 4;
+  delete v4.currentScenarioId;
+  delete v4.legacyMigrationNotes;
+  v4.migrationNotes = ["Historical v4 note retained without rewriting."];
+  const original = structuredClone(v4);
+
+  assert.equal(generatedV4SchemaValidator(v4), true);
+  const result = validateWayfinderInput(v4);
+  assert.equal(result.ok, true);
+  assert.equal(result.migrated, true);
+  assert.equal(result.document.schemaVersion, 5);
+  assert.equal(result.document.currentScenarioId, "fictional-base-city");
+  const {
+    schemaVersion: oldVersion,
+    migrationNotes: oldMigrationNotes,
+    ...oldFields
+  } = original;
+  const {
+    schemaVersion: newVersion,
+    currentScenarioId,
+    migrationNotes: newMigrationNotes,
+    legacyMigrationNotes,
+    ...newFields
+  } = result.document;
+  assert.equal(oldVersion, 4);
+  assert.equal(newVersion, 5);
+  assert.equal(currentScenarioId, "fictional-base-city");
+  assert.deepEqual(legacyMigrationNotes, oldMigrationNotes);
+  assert.deepEqual(newMigrationNotes, [
+    "Migration notes from a v4 file were retained for review.",
+  ]);
+  assert.deepEqual(newFields, oldFields);
+
+  const withUnknownField = structuredClone(v4);
+  withUnknownField.discardedByOldImporter = true;
+  assert.equal(generatedV4SchemaValidator(withUnknownField), false);
+  const rejected = validateWayfinderInput(withUnknownField);
+  assert.equal(rejected.ok, false);
+  assert.ok(rejected.issues.some((issue) => (
+    issue.path === "$.discardedByOldImporter"
+    && issue.message.startsWith("Schema:")
+  )));
+});
+
+test("the v5 generated schema requires a two-letter uppercase country code", async () => {
+  const document = await exampleDocument();
+  document.scenarios[0].flag = "USA";
+
+  assert.equal(generatedSchemaValidator(document), false);
+  const result = validateWayfinderInput(document);
+  assert.equal(result.ok, false);
+  assert.ok(result.issues.some((issue) => issue.path.endsWith(".flag") && issue.message.startsWith("Schema:")));
 });
 
 test("shared import validator exposes the 2 MiB boundary", () => {

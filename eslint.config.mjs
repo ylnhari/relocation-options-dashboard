@@ -16,6 +16,7 @@ const eslintConfig = defineConfig([
     "private-data/**",
     "next-env.d.ts",
     "app/wayfinder-schema-validator.generated.mjs",
+    "app/wayfinder-v4-schema-validator.generated.mjs",
   ]),
   eslint.configs.recommended,
   ...tseslint.configs.recommended,
