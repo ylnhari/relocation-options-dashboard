@@ -1,5 +1,7 @@
 import importlib.util
 import json
+import os
+import subprocess
 import sys
 import unittest
 from pathlib import Path
@@ -278,6 +280,30 @@ class TestRuntimeSeedLauncher(unittest.TestCase):
         child_env = launch.call_args.kwargs["env"]
         for name in inherited:
             self.assertNotIn(name, child_env)
+
+    @unittest.skipUnless(os.name == "nt", "PowerShell launcher regression")
+    def test_powershell_launcher_propagates_a_runtime_seed_failure(self):
+        missing_document = Path(self.tmp.name) / "missing.json"
+        result = subprocess.run(
+            [
+                "powershell.exe",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(DEV_PATH.parent.parent / "start.ps1"),
+                "--document",
+                str(missing_document),
+                "--port",
+                "8780",
+            ],
+            cwd=DEV_PATH.parent.parent,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("runtime seed rejected", result.stderr)
 
 
 if __name__ == "__main__":
